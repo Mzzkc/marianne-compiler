@@ -72,7 +72,7 @@ class SheetComposer:
     """Composes the sheet structure for an agent score.
 
     Takes agent definitions and default config, produces the sheet section
-    of a Mozart score YAML including fan-out, dependencies, cadenzas,
+    of a Marianne score YAML including fan-out, dependencies, cadenzas,
     and instrument assignments.
     """
 
@@ -94,7 +94,7 @@ class SheetComposer:
             agents_dir: Path to agents identity directory.
 
         Returns:
-            Dict representing the ``sheet:`` section of a Mozart score.
+            Dict representing the ``sheet:`` section of a Marianne score.
         """
         name = agent_def["name"]
         agents_dir_path = agents_dir or Path.home() / ".mzt" / "agents"

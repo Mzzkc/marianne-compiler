@@ -1,6 +1,6 @@
 """Compilation pipeline — top-level orchestrator for the composition compiler.
 
-Takes a semantic config YAML and produces complete Mozart scores for each
+Takes a semantic config YAML and produces complete Marianne scores for each
 agent, plus identity directories, fleet configs, and shared technique modules.
 """
 
@@ -16,6 +16,7 @@ from marianne_compiler.fleet import FleetGenerator
 from marianne_compiler.identity import IdentitySeeder
 from marianne_compiler.instruments import InstrumentResolver
 from marianne_compiler.patterns import PatternExpander
+from marianne_compiler.prompt_template import build_phase_template
 from marianne_compiler.sheets import SheetComposer
 from marianne_compiler.techniques import TechniqueWirer
 from marianne_compiler.validations import ValidationGenerator
@@ -26,7 +27,7 @@ _logger = logging.getLogger(__name__)
 class CompilationPipeline:
     """Top-level compilation pipeline.
 
-    Coordinates all compiler modules to produce complete Mozart scores
+    Coordinates all compiler modules to produce complete Marianne scores
     from a semantic agent configuration.
 
     Usage::
@@ -60,7 +61,7 @@ class CompilationPipeline:
         config_path: str | Path,
         output_dir: str | Path | None = None,
     ) -> list[Path]:
-        """Compile a config file into Mozart scores.
+        """Compile a config file into Marianne scores.
 
         Args:
             config_path: Path to the semantic agent config YAML.
@@ -74,6 +75,17 @@ class CompilationPipeline:
         with open(config_path) as f:
             config = yaml.safe_load(f) or {}
 
+        # #213: a config-level techniques_dir (resolved relative to the
+        # config file) overrides the constructor's.
+        config_tech_dir = config.get("defaults", {}).get("techniques_dir") or config.get(
+            "techniques_dir"
+        )
+        if config_tech_dir:
+            tech_path = Path(config_tech_dir)
+            if not tech_path.is_absolute():
+                tech_path = (config_path.parent / tech_path).resolve()
+            self.technique_wirer.techniques_dir = tech_path
+
         if output_dir is None:
             output_dir = config_path.parent / "scores"
         output_dir = Path(output_dir)
@@ -86,7 +98,7 @@ class CompilationPipeline:
         config: dict[str, Any],
         output_dir: Path,
     ) -> list[Path]:
-        """Compile a config dict into Mozart scores.
+        """Compile a config dict into Marianne scores.
 
         Args:
             config: Parsed compiler config dict.
@@ -131,7 +143,7 @@ class CompilationPipeline:
         *,
         workspace: str = "",
     ) -> Path:
-        """Compile a single agent definition into a Mozart score.
+        """Compile a single agent definition into a Marianne score.
 
         Args:
             agent_def: Agent definition dict.
@@ -154,7 +166,26 @@ class CompilationPipeline:
             agent_def, defaults, agents_dir=agents_dir
         )
 
-        # 3. Wire techniques
+        # 3. Wire techniques. #213: when techniques are declared, the
+        # input config MUST say where the technique docs live — explicit,
+        # no implicit discovery (the silent None made every technique
+        # injection a no-op). #215: the compiler-internal copy of the
+        # technique docs is deleted; plugins/marianne/techniques/ is the
+        # canonical store and callers pass it explicitly.
+        declared = dict(defaults.get("techniques", {}))
+        declared.update(
+            agent_def.get("techniques", {})
+            if isinstance(agent_def.get("techniques"), dict)
+            else {}
+        )
+        if declared and self.technique_wirer.techniques_dir is None:
+            raise ValueError(
+                f"Agent '{name}' declares techniques "
+                f"({', '.join(sorted(declared))}) but no techniques_dir is "
+                "configured. Set `techniques_dir:` in the compiler config "
+                "(canonical store: plugins/marianne/techniques/) or pass "
+                "techniques_dir= to CompilationPipeline."
+            )
         technique_result = self.technique_wirer.wire(
             agent_def, defaults, workspace=workspace
         )
@@ -188,8 +219,13 @@ class CompilationPipeline:
         if pattern_names:
             self.pattern_expander.expand(pattern_names, agent_def)
 
-        # 7. Build prompt config
-        prompt_config = self._build_prompt(agent_def, defaults)
+        # 7. Build prompt config — embedding the per-phase technique
+        # manifests in the 12-phase template (#211/#212).
+        prompt_config = self._build_prompt(
+            agent_def,
+            defaults,
+            technique_manifests=technique_result.get("technique_manifests"),
+        )
 
         # 8. Assemble score
         score = self._assemble_score(
@@ -247,13 +283,22 @@ class CompilationPipeline:
         self,
         agent_def: dict[str, Any],
         defaults: dict[str, Any],
+        technique_manifests: dict[int, str] | None = None,
     ) -> dict[str, Any]:
-        """Build the prompt configuration for a score."""
+        """Build the prompt configuration for a score.
+
+        #211: emits the spec §3.3 12-phase ``template`` — each phase gets
+        its invocation, and ``stakes``/``thinking_method`` (previously
+        emitted as dead variables) are referenced by it. #212: the
+        per-phase technique manifests are embedded in the matching phase
+        branches instead of being silently dropped.
+        """
         name = agent_def["name"]
         stakes = agent_def.get("meditation", defaults.get("stakes", ""))
         thinking_method = defaults.get("thinking_method", "")
 
         prompt: dict[str, Any] = {
+            "template": build_phase_template(technique_manifests),
             "variables": {
                 "agent_name": name,
                 "role": agent_def.get("role", "builder"),
@@ -261,13 +306,12 @@ class CompilationPipeline:
                 "voice": agent_def.get("voice", ""),
                 "agent_identity_dir": str(self.identity_seeder.agents_dir / name),
                 "workspace": "{{workspace}}",
+                # Referenced by the template; empty when unset so
+                # StrictUndefined rendering never breaks.
+                "stakes": stakes or "",
+                "thinking_method": thinking_method or "",
             },
         }
-
-        if stakes:
-            prompt["stakes"] = stakes
-        if thinking_method:
-            prompt["thinking_method"] = thinking_method
 
         return prompt
 
@@ -290,11 +334,10 @@ class CompilationPipeline:
         score: dict[str, Any] = {
             "name": name,
             "workspace": workspace,
-            "backend": instrument_result.get("backend", {
-                "type": "claude_cli",
-                "skip_permissions": True,
-                "timeout_seconds": 3600,
-            }),
+            # Post-#347 shape: execution is configured exclusively through
+            # the instrument plugin system — an instrument NAME (or
+            # score-local alias), never a backend dict (#214).
+            "instrument": instrument_result.get("instrument", "claude-code"),
             "instrument_fallbacks": instrument_result.get("instrument_fallbacks", []),
             "sheet": sheet_config,
             "prompt": prompt_config,
@@ -322,6 +365,12 @@ class CompilationPipeline:
             },
             "validations": validations,
         }
+
+        # Score-local instrument aliases (#214): one alias per distinct
+        # (instrument, model) entry so deep fallback chains keep their
+        # per-entry models instead of collapsing to profile defaults.
+        if instrument_result.get("instruments"):
+            score["instruments"] = instrument_result["instruments"]
 
         # Agent card for A2A — stored as sidecar metadata, not in the score
         # itself (JobConfig uses extra="forbid"). The conductor reads the

@@ -72,11 +72,13 @@ class TestInstrumentResolver:
         resolver = InstrumentResolver()
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
-        assert "backend" in result
+        assert "instrument" in result          # post-#347: a name, not a dict
+        assert "instruments" in result          # score-local alias map (#214)
         assert "instrument_fallbacks" in result
         assert "per_sheet_instruments" in result
         assert "per_sheet_instrument_config" in result
         assert "per_sheet_fallbacks" in result
+        assert "backend" not in result          # backend dicts are gone
 
     def test_defaults_applied_per_phase_type(self) -> None:
         """Default instruments are correctly applied for each phase type."""
@@ -88,19 +90,21 @@ class TestInstrumentResolver:
         per_sheet = result["per_sheet_instruments"]
 
         # Verify each phase gets the correct default instrument
+        # #214: per-sheet primaries are model-carrying ALIASES; entries
+        # without per-entry config keep their bare profile name.
         expected: dict[int, str] = {
-            1: "openrouter",   # recon tier
-            2: "openrouter",   # plan tier
-            3: "opencode",     # work tier
-            4: "opencode",     # temperature_check uses work tier
-            5: "opencode",     # integration uses work tier
-            6: "claude-code",  # play tier
-            7: "gemini-cli",   # inspect tier
-            8: "openrouter",   # aar tier
-            9: "openrouter",   # consolidate tier
-            10: "openrouter",  # reflect tier
-            11: "opencode",    # maturity_check uses work tier
-            12: "openrouter",  # resurrect tier
+            1: "openrouter--minimax-2.5",   # recon tier
+            2: "openrouter--minimax-2.5",   # plan tier
+            3: "opencode--minimax-2.5",     # work tier
+            4: "opencode--minimax-2.5",     # temperature_check uses work tier
+            5: "opencode--minimax-2.5",     # integration uses work tier
+            6: "claude-code--claude-opus-4-6",  # play tier
+            7: "gemini-cli",                # inspect tier (bare — no model)
+            8: "openrouter--minimax-2.5",   # aar tier
+            9: "openrouter--minimax-2.5",   # consolidate tier
+            10: "openrouter--minimax-2.5",  # reflect tier
+            11: "opencode--minimax-2.5",     # maturity_check uses work tier
+            12: "openrouter--minimax-2.5",   # resurrect tier
         }
 
         for sheet_num, expected_instrument in expected.items():
@@ -115,9 +119,14 @@ class TestInstrumentResolver:
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
         per_sheet = result["per_sheet_instruments"]
-        # Canyon overrides work to claude-code; sheets using work tier:
-        # sheet 3 (work), 4 (temperature_check), 5 (integration), 11 (maturity_check)
-        assert per_sheet.get(3) == "claude-code"
+        # Canyon overrides work to claude-code@opus; sheets using work tier
+        # get a model-carrying ALIAS (#214) registered in result["instruments"].
+        alias = per_sheet.get(3)
+        assert alias == "claude-code--claude-opus-4-6"
+        assert result["instruments"][alias] == {
+            "profile": "claude-code",
+            "config": {"model": "claude-opus-4-6"},
+        }
 
     def test_defaults_for_non_overridden(self) -> None:
         """Default instruments are used for tiers without agent overrides."""
@@ -125,18 +134,22 @@ class TestInstrumentResolver:
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
         per_sheet = result["per_sheet_instruments"]
-        # Sheet 1 (recon) should use default openrouter
-        assert per_sheet.get(1) == "openrouter"
+        # Sheet 1 (recon) uses the default openrouter+minimax ALIAS
+        alias = per_sheet.get(1)
+        assert alias == "openrouter--minimax-2.5"
+        assert result["instruments"][alias]["profile"] == "openrouter"
+        assert result["instruments"][alias]["config"]["model"] == "minimax/minimax-2.5"
 
     def test_per_sheet_config_has_model(self) -> None:
         """Per-sheet config includes model when specified."""
         resolver = InstrumentResolver()
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
-        config = result["per_sheet_instrument_config"]
-        # Sheet 3 (work, overridden to opus) should have model
-        assert 3 in config
-        assert config[3]["model"] == "claude-opus-4-6"
+        # #214: models live on the score-local ALIAS, not per-sheet config
+        # (per-sheet config now carries only orthogonal settings like
+        # timeout_seconds). The work-tier alias carries the opus model.
+        alias = result["per_sheet_instruments"][3]
+        assert result["instruments"][alias]["config"]["model"] == "claude-opus-4-6"
 
     def test_fallback_chains_populated(self) -> None:
         """Per-sheet fallback chains are populated."""
@@ -208,9 +221,9 @@ class TestInstrumentResolver:
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
         fallbacks = result["instrument_fallbacks"]
-        # Should include instruments from the defaults
-        assert "openrouter" in fallbacks
-        assert "claude-code" in fallbacks or "opencode" in fallbacks
+        # Aliases from the defaults catalog are present (deep chains, #214)
+        assert any(a.startswith("openrouter--") for a in fallbacks)
+        assert any(a.startswith(("claude-code", "opencode", "gemini-cli")) for a in fallbacks)
 
     def test_empty_defaults(self) -> None:
         """Works with no instrument defaults."""
@@ -218,7 +231,7 @@ class TestInstrumentResolver:
         agent = {"name": "bare", "voice": "v", "focus": "f"}
         result = resolver.resolve(agent, {})
 
-        assert result["backend"]["type"] == "claude_cli"
+        assert result["instrument"] == "claude-code"
         assert isinstance(result["per_sheet_instruments"], dict)
 
     def test_backend_config_from_primary(self) -> None:
@@ -226,9 +239,8 @@ class TestInstrumentResolver:
         resolver = InstrumentResolver()
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
-        backend = result["backend"]
-        assert "type" in backend
-        assert "timeout_seconds" in backend
+        # Post-#347: the score-level primary is the work tier's ALIAS
+        assert result["instrument"] == "claude-code--claude-opus-4-6"
 
     def test_all_sheets_covered(self) -> None:
         """Per-sheet instruments cover all 12 sheets."""
@@ -246,10 +258,9 @@ class TestInstrumentResolver:
         agent = {"name": "bare", "voice": "v", "focus": "f"}
         result = resolver.resolve(agent, _make_defaults())
 
-        config = result["per_sheet_instrument_config"]
-        # Sheet 3 (work) has provider: openrouter in defaults
-        assert 3 in config
-        assert config[3].get("provider") == "openrouter"
+        # #214: provider lives on the alias config now
+        alias = result["per_sheet_instruments"][3]
+        assert result["instruments"][alias]["config"].get("provider") == "openrouter"
 
     def test_multiple_agent_overrides(self) -> None:
         """Agent with overrides on multiple tiers."""
@@ -271,8 +282,8 @@ class TestInstrumentResolver:
         per_sheet = result["per_sheet_instruments"]
 
         # Work sheets use goose
-        assert per_sheet[3] == "goose"
+        assert per_sheet[3] == "goose--glm-4.5"
         # Inspect uses gemini-cli (agent override matches default here but with model)
-        assert per_sheet[7] == "gemini-cli"
+        assert per_sheet[7] == "gemini-cli--gemini-2.5-pro"
         # Non-overridden tiers still use defaults
-        assert per_sheet[1] == "openrouter"  # recon
+        assert per_sheet[1] == "openrouter--minimax-2.5"  # recon

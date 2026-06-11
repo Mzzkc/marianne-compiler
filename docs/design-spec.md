@@ -7,7 +7,7 @@
 
 ## 1. What This Is
 
-A compilation system that takes high-level semantic descriptions — agent identities, patterns, techniques, instrument assignments — and produces complete Mozart score YAML. The compiler programs minds. It takes a representation of what an orchestrated system should be and expands it into executable scores that configure LLM execution with full identity, cognitive method, coordination, and tooling.
+A compilation system that takes high-level semantic descriptions — agent identities, patterns, techniques, instrument assignments — and produces complete Marianne score YAML. The compiler programs minds. It takes a representation of what an orchestrated system should be and expands it into executable scores that configure LLM execution with full identity, cognitive method, coordination, and tooling.
 
 The agent generator (`scripts/generate-agent-scores.py`) becomes one module of this compiler. The iterative dev loop generator (`scripts/generate-iterative-dev-loop.py`) is another. New modules handle technique wiring, instrument resolution, validation generation, and identity seeding. Together they form the backend of a composition pipeline that can produce anything from a single-agent investigation to a full company-in-a-box fleet.
 
@@ -38,7 +38,7 @@ This spec covers two things:
                     └────────���──┬─────────────┘
                                 │
                     ┌───────────▼──��──────────┐
-                    │   Mozart Score YAML      │
+                    │   Marianne Score YAML      │
                     │   (one per agent, with   │
                     │    concert linking)       │
                     └──────────���┬─────────────���
@@ -285,7 +285,7 @@ The technique manifest tells the agent what they can do:
 
 **Pattern Expander** — The extensibility point. Patterns from the Rosetta corpus (Cathedral Construction, Composting Cascade, Soil Maturity Index, etc.) are available as named patterns the compiler can compose into sheet sequences. Future work: a pattern library that the compiler draws from to produce sheets with the right cognitive structure for the task.
 
-### 3.3 Output: Mozart Score YAML
+### 3.3 Output: Marianne Score YAML
 
 Per agent, the compiler produces a score with:
 
@@ -385,7 +385,7 @@ pipeline.seed_identity(agent_def, agents_dir)
 pipeline.resolve_instruments(agent_def, defaults)
 ```
 
-Mozart scores can invoke the compiler as a sheet action — a score that generates other scores. The composition pipeline is itself composable.
+Marianne scores can invoke the compiler as a sheet action — a score that generates other scores. The composition pipeline is itself composable.
 
 ---
 
@@ -604,7 +604,7 @@ The compiler generates these manifests from the technique declarations. They're 
 
 The memory protocol (hot/warm/cold tiering, core memories, experiential notes, dreamer consolidation) is extracted from the current templates into a standalone skill document. It can be:
 - Injected into generated agent scores (via the compiler's technique wirer)
-- Referenced by any Mozart score as a skill cadenza
+- Referenced by any Marianne score as a skill cadenza
 - Used by the composition pipeline for non-agent workloads
 
 Same for the mateship protocol (finding → proved → fixed → verified pipeline).
@@ -965,9 +965,9 @@ Marianne is for power users, but should be simple for anyone to pick up:
 
 ## 12. Build Strategy
 
-### 12.1 Mozart Concert
+### 12.1 Marianne Concert
 
-The entire system is built as a Mozart concert — multiple scores orchestrated end-to-end with TDD, coverage validation, and regression testing throughout.
+The entire system is built as a Marianne concert — multiple scores orchestrated end-to-end with TDD, coverage validation, and regression testing throughout.
 
 **Score 1: Discovery** — Research unknowns:
 - A2A protocol best practices and lifecycle management patterns
@@ -1094,6 +1094,6 @@ These are resolved by the Discovery score, not assumed:
 - **Runs on a laptop.** 16-32GB RAM is the target. No Docker requirement for base experience.
 - **Free tier as default.** OpenRouter free models are primary. Paid models are optional power-ups.
 - **Everything through the event flow.** No bypassing the baton. A2A, techniques, sandbox — all routed through events.
-- **Memory and mateship are reusable.** Not embedded in agent templates. Standalone modules usable in any Mozart score.
+- **Memory and mateship are reusable.** Not embedded in agent templates. Standalone modules usable in any Marianne score.
 - **Backward compatible.** Existing scores, tests, and infrastructure continue to work.
 - **The spec corpus governs.** When this design and `.marianne/spec/` conflict, the spec wins.

@@ -4,13 +4,28 @@ Resolution order:
 1. Start with defaults for each phase type (recon, plan, work, etc.)
 2. Apply per-agent overrides
 3. For each sheet, resolve the primary + full fallback chain
-4. Emit per_sheet_instruments and per_sheet_instrument_config in the score YAML
+4. Emit score-local instrument ALIASES + per_sheet assignments in the score
 5. Every sheet gets the full instrument catalog as its tail — no dead ends
+
+Aliases (#214): a fallback entry like ``{instrument: openrouter, model: X}``
+carries per-entry model config. Flattening chains to bare instrument NAMES
+collapsed four distinct openrouter+model entries into one and ran profile
+DEFAULT models (the name-only-resolution trap). The resolver now emits a
+score-level ``instruments:`` alias map — one alias per distinct
+(instrument, model) pair — and every chain references aliases, preserving
+the declared depth and per-entry models end-to-end.
+
+Post-#347 shape: scores carry ``instrument:`` (a name/alias), never a
+``backend:`` dict — execution is configured exclusively through the
+instrument plugin system. The old ``backend_type_map`` (which squashed
+opencode/gemini-cli to claude_cli and produced broken type+model
+combinations) is gone.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from marianne_compiler.sheets import SHEET_PHASE, SHEETS_PER_CYCLE
@@ -34,6 +49,12 @@ PHASE_TIER_MAP: dict[str, str] = {
 }
 
 
+def _model_slug(model: str) -> str:
+    """Filesystem/YAML-safe slug for a model string (provider prefix dropped)."""
+    tail = model.rsplit("/", 1)[-1]
+    return re.sub(r"[^a-zA-Z0-9.]+", "-", tail).strip("-").lower()
+
+
 class InstrumentResolver:
     """Resolves per-sheet instrument assignments with deep fallback chains.
 
@@ -55,21 +76,27 @@ class InstrumentResolver:
 
         Returns:
             Dict with keys:
-                ``backend``: dict — primary backend config
+                ``instrument``: str — score-level primary (work tier) alias
+                ``instruments``: dict[str, dict] — score-local alias map
+                    (alias -> {profile, config}); empty when no entry
+                    needs per-entry config
                 ``instrument_fallbacks``: list[str] — score-level fallbacks
                 ``per_sheet_instruments``: dict[int, str] — per-sheet primary
                 ``per_sheet_instrument_config``: dict[int, dict] — per-sheet config
-                ``per_sheet_fallbacks``: dict[int, list[str]] — per-sheet fallback chains
+                ``per_sheet_fallbacks``: dict[int, list[str]] — per-sheet
+                    fallback chains, declared depth preserved via aliases
         """
         default_instruments = defaults.get("instruments", {})
         agent_instruments = agent_def.get("instruments", {})
+
+        self._aliases: dict[str, dict[str, Any]] = {}
 
         per_sheet_instruments: dict[int, str] = {}
         per_sheet_config: dict[int, dict[str, Any]] = {}
         per_sheet_fallbacks: dict[int, list[str]] = {}
 
-        # Build the full instrument catalog for tail fallbacks
-        all_instruments = self._collect_all_instruments(default_instruments)
+        # Build the full instrument catalog (as aliases) for tail fallbacks
+        all_aliases = self._collect_all_aliases(default_instruments)
 
         for sheet_num in range(1, SHEETS_PER_CYCLE + 1):
             phase = SHEET_PHASE.get(sheet_num, "work")
@@ -82,48 +109,84 @@ class InstrumentResolver:
 
             if resolved:
                 primary = resolved.get("primary", {})
-                instrument_name = primary.get("instrument", "")
-                if instrument_name:
-                    per_sheet_instruments[sheet_num] = instrument_name
+                primary_alias = self._alias_for(primary)
+                if primary_alias:
+                    per_sheet_instruments[sheet_num] = primary_alias
 
-                model = primary.get("model", "")
-                provider = primary.get("provider", "")
+                # Timeout is per-sheet (orthogonal to the alias's model)
                 timeout = primary.get("timeout_seconds", 0)
-                config: dict[str, Any] = {}
-                if model:
-                    config["model"] = model
-                if provider:
-                    config["provider"] = provider
                 if timeout:
-                    config["timeout_seconds"] = timeout
-                if config:
-                    per_sheet_config[sheet_num] = config
+                    per_sheet_config[sheet_num] = {"timeout_seconds": timeout}
 
-                # Build fallback chain: explicit fallbacks + full catalog tail
+                # Build fallback chain: explicit fallbacks + full catalog
+                # tail — every declared entry keeps its own alias (depth
+                # and per-entry models preserved, #214).
                 fallbacks = self._build_fallback_chain(
                     resolved.get("fallbacks", []),
-                    all_instruments,
-                    exclude=instrument_name,
+                    all_aliases,
+                    exclude=primary_alias,
                 )
                 if fallbacks:
                     per_sheet_fallbacks[sheet_num] = fallbacks
 
-        # Determine score-level primary backend
+        # Score-level primary: the work tier's alias (post-#347: a name,
+        # never a backend dict).
         work_tier = self._resolve_for_tier(
             "work", agent_instruments, default_instruments
         )
-        primary_backend = self._to_backend_config(work_tier)
+        primary_instrument = (
+            self._alias_for(work_tier.get("primary", {})) or "claude-code"
+        )
 
         # Score-level fallbacks from the full catalog
-        score_fallbacks = list(all_instruments)
+        score_fallbacks = [a for a in all_aliases if a != primary_instrument]
 
         return {
-            "backend": primary_backend,
+            "instrument": primary_instrument,
+            "instruments": {
+                alias: spec
+                for alias, spec in self._aliases.items()
+                if spec["config"]  # bare profile references need no alias
+            },
             "instrument_fallbacks": score_fallbacks,
             "per_sheet_instruments": per_sheet_instruments,
             "per_sheet_instrument_config": per_sheet_config,
             "per_sheet_fallbacks": per_sheet_fallbacks,
         }
+
+    def _alias_for(self, entry: dict[str, Any] | str) -> str:
+        """Return the alias name for an instrument entry, registering it.
+
+        A bare instrument (no model/provider config) aliases to its own
+        profile name. An entry with a model gets a distinct
+        ``{instrument}--{model-slug}`` alias carrying the model config —
+        this is what keeps two openrouter entries with different models
+        distinct in a fallback chain.
+        """
+        if isinstance(entry, str):
+            name = entry
+            model = ""
+            provider = ""
+        elif isinstance(entry, dict):
+            name = entry.get("instrument", "")
+            model = entry.get("model", "")
+            provider = entry.get("provider", "")
+        else:
+            return ""
+        if not name:
+            return ""
+
+        config: dict[str, Any] = {}
+        if model:
+            config["model"] = model
+        if provider:
+            config["provider"] = provider
+
+        alias = name if not config else f"{name}--{_model_slug(model or provider)}"
+        existing = self._aliases.get(alias)
+        if existing is None:
+            self._aliases[alias] = {"profile": name, "config": config}
+        return alias
 
     def _resolve_for_tier(
         self,
@@ -157,13 +220,14 @@ class InstrumentResolver:
     def _build_fallback_chain(
         self,
         explicit_fallbacks: list[dict[str, Any]],
-        all_instruments: list[str],
+        all_aliases: list[str],
         exclude: str = "",
     ) -> list[str]:
-        """Build a complete fallback chain.
+        """Build a complete fallback chain of ALIASES (#214).
 
-        Starts with explicit fallbacks, then appends all instruments
-        from the catalog that aren't already in the chain.
+        Starts with the explicit fallbacks — each entry gets its own
+        alias, so two entries on the same instrument with different
+        models stay distinct — then appends catalog aliases as the tail.
         """
         chain: list[str] = []
         seen: set[str] = set()
@@ -171,83 +235,38 @@ class InstrumentResolver:
         if exclude:
             seen.add(exclude)
 
-        # Add explicit fallbacks first
+        # Add explicit fallbacks first, one alias per declared entry
         for fb in explicit_fallbacks:
-            if isinstance(fb, dict):
-                name = fb.get("instrument", "")
-            elif isinstance(fb, str):
-                name = fb
-            else:
-                continue
-            if name and name not in seen:
-                chain.append(name)
-                seen.add(name)
+            alias = self._alias_for(fb)
+            if alias and alias not in seen:
+                chain.append(alias)
+                seen.add(alias)
 
-        # Append remaining catalog instruments as tail
-        for name in all_instruments:
-            if name not in seen:
-                chain.append(name)
-                seen.add(name)
+        # Append remaining catalog aliases as tail
+        for alias in all_aliases:
+            if alias not in seen:
+                chain.append(alias)
+                seen.add(alias)
 
         return chain
 
-    def _collect_all_instruments(
+    def _collect_all_aliases(
         self,
         default_instruments: dict[str, Any],
     ) -> list[str]:
-        """Collect all unique instrument names from defaults."""
-        instruments: list[str] = []
+        """Collect aliases for every distinct instrument entry in defaults."""
+        aliases: list[str] = []
         seen: set[str] = set()
 
         for tier_config in default_instruments.values():
             if not isinstance(tier_config, dict):
                 continue
-            # Primary
-            primary = tier_config.get("primary", {})
-            if isinstance(primary, dict):
-                name = primary.get("instrument", "")
-                if name and name not in seen:
-                    instruments.append(name)
-                    seen.add(name)
-            # Fallbacks
-            for fb in tier_config.get("fallbacks", []):
-                if isinstance(fb, dict):
-                    name = fb.get("instrument", "")
-                elif isinstance(fb, str):
-                    name = fb
-                else:
-                    continue
-                if name and name not in seen:
-                    instruments.append(name)
-                    seen.add(name)
+            entries: list[Any] = [tier_config.get("primary", {})]
+            entries.extend(tier_config.get("fallbacks", []))
+            for entry in entries:
+                alias = self._alias_for(entry)
+                if alias and alias not in seen:
+                    aliases.append(alias)
+                    seen.add(alias)
 
-        return instruments
-
-    def _to_backend_config(self, tier_config: dict[str, Any]) -> dict[str, Any]:
-        """Convert a tier config's primary to a backend config dict."""
-        primary = tier_config.get("primary", {})
-        if not isinstance(primary, dict):
-            return {"type": "claude_cli", "skip_permissions": True, "timeout_seconds": 3600}
-
-        instrument = primary.get("instrument", "claude-code")
-        model = primary.get("model", "")
-        timeout = primary.get("timeout_seconds", 3600)
-
-        # Map instrument names to backend types
-        backend_type_map: dict[str, str] = {
-            "claude-code": "claude_cli",
-            "openrouter": "openrouter",
-            "gemini-cli": "claude_cli",
-            "opencode": "claude_cli",
-            "goose": "claude_cli",
-        }
-
-        backend: dict[str, Any] = {
-            "type": backend_type_map.get(instrument, "claude_cli"),
-            "skip_permissions": True,
-            "timeout_seconds": timeout,
-        }
-        if model:
-            backend["model"] = model
-
-        return backend
+        return aliases

@@ -1,7 +1,7 @@
-"""Composition compiler — turns semantic agent definitions into Mozart scores.
+"""Composition compiler — turns semantic agent definitions into Marianne scores.
 
 The compiler takes high-level descriptions (agent identities, patterns,
-techniques, instrument assignments) and produces complete Mozart score YAML.
+techniques, instrument assignments) and produces complete Marianne score YAML.
 
 Modules:
     identity    — Seed agent identity stores (L1-L4)

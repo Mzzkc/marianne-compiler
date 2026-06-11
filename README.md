@@ -1,12 +1,12 @@
 # Marianne Compiler
 
-Composition compiler for [Marianne AI Compose](https://github.com/Mzzkc/marianne-ai-compose) — takes semantic agent definitions and produces executable Mozart score YAML.
+Composition compiler for [Marianne AI Compose](https://github.com/Mzzkc/marianne-ai-compose) — takes semantic agent definitions and produces executable Marianne score YAML.
 
 ## What It Does
 
 **Input:** Semantic YAML describing agents as people — voice, focus, meditation, techniques, instruments.
 
-**Output:** Mozart score YAML (one per agent), identity directories (`~/.mzt/agents/`), fleet configs, agent card sidecars.
+**Output:** Marianne score YAML (one per agent), identity directories (`~/.mzt/agents/`), fleet configs, agent card sidecars.
 
 The compiler is a deterministic expansion engine. Same input produces same output. No AI reasoning at compile time.
 
