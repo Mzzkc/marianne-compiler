@@ -3,6 +3,14 @@
 **Date:** 2026-04-13
 **Status:** Draft — pending review
 
+> **As-built note (2026-06-12):** Marianne's legacy `backend:` score field
+> was removed (#347). The implemented compiler emits `instrument:`
+> references (a registry name or score-local alias), never a backend dict
+> (#214) — read the `backend:` mentions below as historical design
+> language. The "OpenRouter HTTP backend" alternative path described in
+> §later sections was not built; OpenCode-with-OpenRouter is the shipped
+> route.
+
 ---
 
 ## 1. What This Is
@@ -293,7 +301,7 @@ Per agent, the compiler produces a score with:
 name: "{project}-{agent_name}"
 workspace: {workspace}
 
-backend: {resolved primary instrument backend config}
+instrument: {resolved primary instrument name or score-local alias}  # as-built (#214)
 instrument_fallbacks: {deep chain}
 
 sheet:
