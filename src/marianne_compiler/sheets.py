@@ -1,11 +1,11 @@
 """Sheet composer — produces the sheet structure for agent scores.
 
-Generates a 12-sheet cycle structure with parallel fan-out phases:
+Generates a 12-sheet cycle structure with parallel dependency phases:
 
     Phase 1   (sequential):   Recon -> Plan -> Work          (sheets 1-3)
     Phase 1.5 (CLI):          Temperature check (gates Play)  (sheet 4)
-    Phase 2   (fan-out of 3): Integration || Play || Inspect  (sheets 5-7)
-    Phase 3   (fan-out of 3): AAR || Consolidate || Reflect   (sheets 8-10)
+    Phase 2   (parallel):     Integration || Play || Inspect  (sheets 5-7)
+    Phase 3   (parallel):     AAR || Consolidate || Reflect   (sheets 8-10)
     Phase 3.5 (CLI):          Maturity check                  (sheet 11)
     Phase 4   (sequential):   Resurrect                       (sheet 12)
 
@@ -46,10 +46,6 @@ for _phase, _sheets in PHASE_MAP.items():
 
 # CLI instrument sheets (not LLM calls)
 CLI_SHEETS = {4, 11}
-
-# Fan-out configuration
-FANOUT_PHASE_2 = {5: "integration", 6: "play", 7: "inspect"}
-FANOUT_PHASE_3 = {8: "aar", 9: "consolidate", 10: "reflect"}
 
 # Sheet descriptions
 SHEET_DESCRIPTIONS: dict[int, str] = {
@@ -97,7 +93,7 @@ class SheetComposer:
             Dict representing the ``sheet:`` section of a Marianne score.
         """
         name = agent_def["name"]
-        agents_dir_path = agents_dir or Path.home() / ".mzt" / "agents"
+        agents_dir_path = agents_dir or Path.home() / ".marianne" / "agents"
         identity_dir = str(agents_dir_path / name)
 
         sheet_config: dict[str, Any] = {
@@ -106,19 +102,14 @@ class SheetComposer:
             "descriptions": dict(SHEET_DESCRIPTIONS),
             "prelude": self._build_prelude(identity_dir, defaults),
             "cadenzas": self._build_cadenzas(identity_dir, defaults),
-            "fan_out": {
-                # Phase 2: 3 parallel instances (integration, play, inspect)
-                5: 3,
-                # Phase 3: 3 parallel instances (aar, consolidate, reflect)
-                8: 3,
-            },
             "dependencies": self._build_dependencies(),
         }
 
-        # Add skip_when_command for play gating
+        # Add command skip rules for play gating. The live score schema uses
+        # `skip_when` (formerly skip_when_command).
         skip_when = self._build_skip_when(agent_def, defaults, identity_dir)
         if skip_when:
-            sheet_config["skip_when_command"] = skip_when
+            sheet_config["skip_when"] = skip_when
 
         return sheet_config
 
@@ -193,8 +184,8 @@ class SheetComposer:
         """Build sheet dependency DAG.
 
         Sequential phases have linear dependencies.
-        Fan-out phases depend on the previous sequential sheet.
-        Post-fan-out phases depend on all fan-out instances.
+        Parallel phases depend on the previous sequential sheet.
+        Post-parallel phases depend on all parallel phase sheets.
         """
         return {
             2: [1],       # plan depends on recon
@@ -216,7 +207,7 @@ class SheetComposer:
         defaults: dict[str, Any],
         identity_dir: str,
     ) -> dict[int, dict[str, Any]]:
-        """Build skip_when_command for conditional sheet execution.
+        """Build skip_when for conditional sheet execution.
 
         The temperature check (sheet 4) gates the play sheet (sheet 6).
         """
@@ -229,13 +220,15 @@ class SheetComposer:
         stagnation = play_routing.get("stagnation_cycles", 3)
         min_cycles = play_routing.get("min_cycles_between_play", 5)
 
-        # Play is gated: skip play (sheet 6) if temperature check says work
+        # Play is gated: skip play (sheet 6) if temperature check says work.
+        # The temperature-check CLI sheet always exits 0 and writes one of
+        # these markers; skip_when consumes the work marker.
         temp_cmd = (
             f"AGENT_DIR={identity_dir} AGENT_NAME={name} "
             f"MEMORY_BLOAT_THRESHOLD={memory_bloat} "
             f"STAGNATION_CYCLES={stagnation} "
             f"MIN_CYCLES_BETWEEN_PLAY={min_cycles} "
-            f"test -f {{{{workspace}}}}/cycle-state/temperature-play"
+            f"test -f {{workspace}}/cycle-state/temperature-{name}-work"
         )
 
         return {

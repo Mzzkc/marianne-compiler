@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from marianne_compiler.instruments import PHASE_TIER_MAP, InstrumentResolver
+from marianne_compiler.instruments import (
+    PHASE_TIER_MAP,
+    InstrumentResolver,
+    filter_config_to_available_instruments,
+)
 from marianne_compiler.sheets import SHEET_PHASE, SHEETS_PER_CYCLE
 
 
@@ -25,7 +29,7 @@ def _make_defaults() -> dict[str, object]:
             "recon": {
                 "primary": {"instrument": "openrouter", "model": "minimax/minimax-2.5"},
                 "fallbacks": [
-                    {"instrument": "openrouter", "model": "meta-llama/llama-4-maverick"},
+                    {"instrument": "openrouter", "model": "zhipu/glm-4.5-air"},
                     {"instrument": "gemini-cli"},
                 ],
             },
@@ -34,10 +38,24 @@ def _make_defaults() -> dict[str, object]:
                 "fallbacks": [{"instrument": "gemini-cli"}],
             },
             "work": {
-                "primary": {"instrument": "opencode", "model": "minimax/minimax-2.5", "provider": "openrouter"},
+                "primary": {
+                    "instrument": "opencode",
+                    "model": "minimax/minimax-2.5",
+                    "provider": "openrouter",
+                },
                 "fallbacks": [
                     {"instrument": "claude-code", "model": "claude-opus-4-6"},
                     {"instrument": "openrouter", "model": "minimax/minimax-2.5"},
+                ],
+            },
+            "integration": {
+                "primary": {
+                    "instrument": "claude-code",
+                    "model": "claude-sonnet-4-5",
+                },
+                "fallbacks": [
+                    {"instrument": "gemini-cli"},
+                    {"instrument": "codex-cli"},
                 ],
             },
             "play": {
@@ -96,14 +114,14 @@ class TestInstrumentResolver:
             1: "openrouter--minimax-2.5",   # recon tier
             2: "openrouter--minimax-2.5",   # plan tier
             3: "opencode--minimax-2.5",     # work tier
-            4: "opencode--minimax-2.5",     # temperature_check uses work tier
-            5: "opencode--minimax-2.5",     # integration uses work tier
+            4: "cli",                        # temperature_check uses CLI tier
+            5: "claude-code--claude-sonnet-4-5",  # integration tier
             6: "claude-code--claude-opus-4-6",  # play tier
             7: "gemini-cli",                # inspect tier (bare — no model)
             8: "openrouter--minimax-2.5",   # aar tier
             9: "openrouter--minimax-2.5",   # consolidate tier
             10: "openrouter--minimax-2.5",  # reflect tier
-            11: "opencode--minimax-2.5",     # maturity_check uses work tier
+            11: "cli",                       # maturity_check uses CLI tier
             12: "openrouter--minimax-2.5",   # resurrect tier
         }
 
@@ -127,6 +145,9 @@ class TestInstrumentResolver:
             "profile": "claude-code",
             "config": {"model": "claude-opus-4-6"},
         }
+        # Integration has its own tier and should not inherit work overrides
+        # unless no integration tier exists.
+        assert per_sheet.get(5) == "claude-code--claude-sonnet-4-5"
 
     def test_defaults_for_non_overridden(self) -> None:
         """Default instruments are used for tiers without agent overrides."""
@@ -160,38 +181,24 @@ class TestInstrumentResolver:
         # Most sheets should have fallback chains
         assert len(fallbacks) > 0
 
-    def test_no_dead_ends(self) -> None:
-        """Every sheet's fallback chain contains all catalog instruments."""
+    def test_no_implicit_catalog_tail(self) -> None:
+        """Fallback chains contain only the resolved tier's explicit fallbacks."""
         resolver = InstrumentResolver()
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
-        all_instruments = set(result["instrument_fallbacks"])
-        per_sheet = result["per_sheet_instruments"]
         fallbacks = result["per_sheet_fallbacks"]
 
-        for sheet_num in range(1, SHEETS_PER_CYCLE + 1):
-            primary = per_sheet.get(sheet_num, "")
-            chain = fallbacks.get(sheet_num, [])
-            # primary + chain should cover the full catalog
-            covered = {primary} | set(chain)
-            missing = all_instruments - covered
-            assert not missing, (
-                f"Sheet {sheet_num} missing instruments in fallback chain: {missing}"
-            )
+        assert fallbacks[1] == ["openrouter--glm-4.5-air", "gemini-cli"]
+        assert "opencode--minimax-2.5" not in fallbacks[1]
+        assert "claude-code--claude-opus-4-6" not in fallbacks[1]
 
     def test_deep_fallbacks_chain_order(self) -> None:
-        """Explicit fallbacks appear before catalog tail in each chain."""
+        """Explicit fallback order is preserved without a catalog tail."""
         resolver = InstrumentResolver()
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
         fallbacks = result["per_sheet_fallbacks"]
-        # Sheet 1 (recon) has explicit fallbacks: openrouter(maverick), gemini-cli
-        chain_1 = fallbacks.get(1, [])
-        if "gemini-cli" in chain_1:
-            # gemini-cli is an explicit fallback, should appear before catalog tail
-            gemini_idx = chain_1.index("gemini-cli")
-            # Catalog-only instruments (not in explicit fallbacks) should come after
-            assert gemini_idx < len(chain_1), "Explicit fallbacks should be early in chain"
+        assert fallbacks[1] == ["openrouter--glm-4.5-air", "gemini-cli"]
 
     def test_resolves_concrete_sheet_numbers_from_phases(self) -> None:
         """PHASE_TIER_MAP maps every phase to a tier used for instrument lookup."""
@@ -216,14 +223,12 @@ class TestInstrumentResolver:
             )
 
     def test_score_level_fallbacks(self) -> None:
-        """Score-level fallbacks include all instruments from defaults."""
+        """Score-level fallbacks mirror the explicit work-tier chain."""
         resolver = InstrumentResolver()
         result = resolver.resolve(_make_agent_def(), _make_defaults())
 
         fallbacks = result["instrument_fallbacks"]
-        # Aliases from the defaults catalog are present (deep chains, #214)
-        assert any(a.startswith("openrouter--") for a in fallbacks)
-        assert any(a.startswith(("claude-code", "opencode", "gemini-cli")) for a in fallbacks)
+        assert fallbacks == ["openrouter--minimax-2.5"]
 
     def test_empty_defaults(self) -> None:
         """Works with no instrument defaults."""
@@ -283,7 +288,87 @@ class TestInstrumentResolver:
 
         # Work sheets use goose
         assert per_sheet[3] == "goose--glm-4.5"
+        # Integration stays on the integration tier, not the work override
+        assert per_sheet[5] == "claude-code--claude-sonnet-4-5"
         # Inspect uses gemini-cli (agent override matches default here but with model)
         assert per_sheet[7] == "gemini-cli--gemini-2.5-pro"
         # Non-overridden tiers still use defaults
         assert per_sheet[1] == "openrouter--minimax-2.5"  # recon
+
+    def test_integration_falls_back_to_work_when_no_integration_tier(self) -> None:
+        """Old configs without an integration tier keep using the work tier."""
+        defaults = _make_defaults()
+        instruments = defaults["instruments"]
+        assert isinstance(instruments, dict)
+        instruments.pop("integration")
+        resolver = InstrumentResolver()
+        agent = {"name": "bare", "voice": "v", "focus": "f"}
+
+        result = resolver.resolve(agent, defaults)
+
+        assert result["per_sheet_instruments"][5] == "opencode--minimax-2.5"
+        assert result["per_sheet_fallbacks"][5] == [
+            "claude-code--claude-opus-4-6",
+            "openrouter--minimax-2.5",
+        ]
+
+
+class TestAvailabilityFiltering:
+    def test_filter_promotes_first_available_fallback(self) -> None:
+        config = {
+            "defaults": {
+                "instruments": {
+                    "work": {
+                        "primary": {
+                            "instrument": "missing-cli",
+                            "model": "unavailable",
+                        },
+                        "fallbacks": [
+                            {"instrument": "gemini-cli", "model": "gemini-3.5-flash"},
+                            {"instrument": "claude-code", "model": "glm-5.2[1m]"},
+                        ],
+                    }
+                }
+            },
+            "agents": [{"name": "a"}],
+        }
+
+        filtered = filter_config_to_available_instruments(
+            config,
+            {"claude-code"},
+        )
+
+        work = filtered["defaults"]["instruments"]["work"]
+        assert work["primary"] == {"instrument": "claude-code", "model": "glm-5.2[1m]"}
+        assert work["fallbacks"] == []
+
+    def test_filter_removes_unavailable_agent_override(self) -> None:
+        config = {
+            "defaults": {
+                "instruments": {
+                    "work": {
+                        "primary": {"instrument": "claude-code", "model": "glm-5.2[1m]"},
+                        "fallbacks": [{"instrument": "gemini-cli"}],
+                    }
+                }
+            },
+            "agents": [
+                {
+                    "name": "a",
+                    "instruments": {
+                        "work": {
+                            "primary": {"instrument": "missing-cli"},
+                        }
+                    },
+                }
+            ],
+        }
+
+        filtered = filter_config_to_available_instruments(
+            config,
+            {"claude-code"},
+        )
+
+        work = filtered["agents"][0]["instruments"]["work"]
+        assert work["primary"] == {"instrument": "claude-code", "model": "glm-5.2[1m]"}
+        assert work["fallbacks"] == []

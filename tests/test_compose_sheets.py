@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
+from jinja2 import Environment
+
+from marianne_compiler.prompt_template import build_phase_template
 from marianne_compiler.sheets import (
     CLI_SHEETS,
     PHASE_MAP,
@@ -43,16 +47,19 @@ class TestSheetComposer:
         assert result["total_items"] == 12
         assert result["size"] == 1
 
-    def test_has_fan_out(self) -> None:
-        """Sheet config includes fan-out for phases 2 and 3."""
+    def test_has_parallel_phase_dependencies(self) -> None:
+        """Sheet config allows phases 2 and 3 to run in parallel via DAG."""
         composer = SheetComposer()
         result = composer.compose(_make_agent_def(), _make_defaults())
 
-        fan_out = result["fan_out"]
-        assert 5 in fan_out  # Phase 2 starts at sheet 5
-        assert fan_out[5] == 3
-        assert 8 in fan_out  # Phase 3 starts at sheet 8
-        assert fan_out[8] == 3
+        assert "fan_out" not in result
+        deps = result["dependencies"]
+        assert deps[5] == [4]
+        assert deps[6] == [4]
+        assert deps[7] == [4]
+        assert set(deps[8]) == {5, 6, 7}
+        assert set(deps[9]) == {5, 6, 7}
+        assert set(deps[10]) == {5, 6, 7}
 
     def test_has_dependencies(self) -> None:
         """Sheet config includes proper dependency DAG."""
@@ -107,19 +114,25 @@ class TestSheetComposer:
             assert i in descriptions, f"Sheet {i} missing description"
 
     def test_skip_when_for_play(self) -> None:
-        """Play sheet has skip_when_command gating."""
+        """Play sheet has skip_when gating."""
         composer = SheetComposer()
         result = composer.compose(_make_agent_def(), _make_defaults())
 
-        skip = result.get("skip_when_command", {})
+        skip = result.get("skip_when", {})
         assert 6 in skip  # Play sheet is gated
+        assert "skip_when_command" not in result
+        command = skip[6]["command"]
+        assert "{workspace}" in command
+        assert "{{workspace}}" not in command
+        assert "temperature-play" not in command
+        assert "temperature-canyon-work" in command
 
     def test_play_gate_only_affects_play(self) -> None:
         """Temperature check gates only Play, not Integration or Inspect."""
         composer = SheetComposer()
         result = composer.compose(_make_agent_def(), _make_defaults())
 
-        skip = result.get("skip_when_command", {})
+        skip = result.get("skip_when", {})
         # Play (sheet 6) is gated
         assert 6 in skip
         # Integration (sheet 5) and Inspect (sheet 7) are NOT gated
@@ -172,5 +185,85 @@ class TestSheetComposer:
         result = composer.compose(_make_agent_def(), {})
 
         assert result["total_items"] == 12
-        # No skip_when_command when no play routing
-        assert result.get("skip_when_command", {}) == {}
+        # No skip_when when no play routing
+        assert result.get("skip_when", {}) == {}
+
+
+def _render_compiled_phase(
+    *,
+    sheet_num: int,
+    workspace: Path,
+    agent_dir: Path,
+) -> str:
+    template = Environment().from_string(build_phase_template())
+    return template.render(
+        stage=sheet_num,
+        workspace=str(workspace),
+        agent_identity_dir=str(agent_dir),
+        agent_name="canyon",
+        role="architect",
+        focus="architecture",
+        agent_voice="Structure persists.",
+    )
+
+
+class TestCompiledCliPhaseTemplates:
+    """CLI phases render executable shell commands, not prose prompts."""
+
+    def test_temperature_check_command_writes_play_marker(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        agent_dir = tmp_path / "agents" / "canyon"
+        workspace.mkdir(parents=True)
+        agent_dir.mkdir(parents=True)
+        (workspace / "TASKS.md").write_text("- [x] Done (priority: P0)\n")
+        (agent_dir / "profile.yaml").write_text(
+            "cycle_count: 10\nlast_play_cycle: 0\n"
+        )
+        (agent_dir / "recent.md").write_text("short memory\n")
+        (agent_dir / "growth.md").write_text("# Growth\n\n## Entry\n")
+
+        command = _render_compiled_phase(
+            sheet_num=4,
+            workspace=workspace,
+            agent_dir=agent_dir,
+        )
+        result = subprocess.run(
+            ["bash", "-c", command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert (workspace / "cycle-state" / "temperature-canyon-play").exists()
+        assert not (workspace / "cycle-state" / "temperature-canyon-work").exists()
+        assert "temperature decision: play" in result.stdout
+
+    def test_maturity_check_command_writes_report(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "workspace"
+        agent_dir = tmp_path / "agents" / "canyon"
+        workspace.mkdir(parents=True)
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "profile.yaml").write_text(
+            "developmental_stage: recognition\n"
+            "standing_pattern_count: 0\n"
+            "cycle_count: 12\n"
+        )
+        (agent_dir / "growth.md").write_text("# Growth\n\n## Entry\n")
+
+        command = _render_compiled_phase(
+            sheet_num=11,
+            workspace=workspace,
+            agent_dir=agent_dir,
+        )
+        result = subprocess.run(
+            ["bash", "-c", command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        report = workspace / "cycle-state" / "canyon-maturity-report.yaml"
+        assert result.returncode == 0, result.stderr
+        assert report.exists()
+        assert "current_stage: recognition" in report.read_text()

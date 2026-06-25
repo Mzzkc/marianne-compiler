@@ -94,6 +94,32 @@ class TestCliCompose:
         assert "prompt" in score_data
         assert score_data["sheet"]["total_items"] == 12
 
+        hook = score_data["on_success"][0]
+        score_path = output_dir / "test-agent.yaml"
+        assert hook["job_path"] == str(score_path.resolve())
+        assert Path(hook["job_path"]).exists()
+
+    def test_default_output_uses_workspace_scores_dir(self, tmp_path: Path) -> None:
+        """When workspace is configured, default output is workspace/scores."""
+        app = _make_app()
+        config_path = _create_config(tmp_path)
+        agents_dir = tmp_path / "agents"
+        output_dir = tmp_path / "workspace" / "scores"
+
+        result = runner.invoke(app, [
+            str(config_path),
+            "--agents-dir", str(agents_dir),
+        ])
+
+        assert result.exit_code == 0, f"Exit code: {result.exit_code}\n{result.output}"
+        score_path = output_dir / "test-agent.yaml"
+        assert score_path.exists()
+
+        score_data = yaml.safe_load(score_path.read_text())
+        assert score_data["on_success"][0]["job_path"] == (
+            "{workspace}/scores/test-agent.yaml"
+        )
+
     def test_fleet_flag_produces_fleet_config(self, tmp_path: Path) -> None:
         """--fleet flag forces fleet config generation even for single agent."""
         app = _make_app()
@@ -152,6 +178,16 @@ class TestCliCompose:
 
         assert result.exit_code == 0
         assert "test-project" in result.output or "Dry Run" in result.output
+
+    def test_preset_dry_run(self) -> None:
+        """--preset loads a shipped compiler config without a config path."""
+        app = _make_app()
+
+        result = runner.invoke(app, ["--preset", "generic-fleet", "--dry-run"])
+
+        assert result.exit_code == 0
+        assert "generic-agent-fleet" in result.output
+        assert "Agents: 32" in result.output
 
     def test_seed_only(self, tmp_path: Path) -> None:
         """--seed-only creates identities without scores."""

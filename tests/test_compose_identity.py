@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from marianne_compiler.identity import IdentitySeeder, L1_MAX_WORDS, L2_MAX_WORDS, L3_MAX_WORDS
+from marianne_compiler.identity import L1_MAX_WORDS, L2_MAX_WORDS, L3_MAX_WORDS, IdentitySeeder
 
 
 def _make_agent_def(

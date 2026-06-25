@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pytest
 import yaml
-
-from marianne_compiler.fleet import FleetGenerator
 from marianne.core.config.fleet import FleetConfig, FleetGroupConfig
 from marianne.daemon.fleet import topological_sort_groups
+from pydantic import ValidationError
+
+from marianne_compiler.fleet import FleetGenerator
 
 
 def _make_config(
@@ -50,6 +51,22 @@ class TestFleetGenerator:
         for score in result["scores"]:
             assert "path" in score
             assert score["path"].endswith(".yaml")
+            assert not Path(score["path"]).is_absolute()
+
+    def test_fleet_scores_are_relative_to_fleet_dir(self, tmp_path: Path) -> None:
+        """Generated fleet paths are portable with the fleet config."""
+        gen = FleetGenerator()
+        scores_dir = tmp_path / "workspace" / "scores"
+        fleet_dir = tmp_path / "workspace"
+
+        result = gen.generate(_make_config(), scores_dir, fleet_dir=fleet_dir)
+
+        paths = [score["path"] for score in result["scores"]]
+        assert paths == [
+            "scores/canyon.yaml",
+            "scores/forge.yaml",
+            "scores/sentinel.yaml",
+        ]
 
     def test_fleet_scores_have_groups(self) -> None:
         """Score entries include their group assignment."""
@@ -84,6 +101,10 @@ class TestFleetGenerator:
         data = yaml.safe_load(output_path.read_text())
         assert data["type"] == "fleet"
         assert len(data["scores"]) == 3
+        assert all(
+            not Path(score["path"]).is_absolute()
+            for score in data["scores"]
+        )
 
     def test_empty_agents_raises(self) -> None:
         """Empty agent list raises ValueError."""
@@ -218,7 +239,7 @@ class TestFleetGenerator:
         # A FleetConfig cannot contain nested fleet entries — it only holds
         # FleetScoreEntry items with path + optional group. There is no
         # sub-fleet field. Attempting to add nested fleet structure fails.
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             FleetConfig(
                 name="outer",
                 type="fleet",

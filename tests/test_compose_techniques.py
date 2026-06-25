@@ -13,7 +13,7 @@ def _make_agent_def(name: str = "canyon") -> dict[str, object]:
         "voice": "Structure persists.",
         "focus": "architecture",
         "techniques": {
-            "symbols-python": {
+            "code-symbols": {
                 "kind": "mcp",
                 "phases": ["work", "inspect"],
             },
@@ -108,29 +108,44 @@ class TestTechniqueWirer:
         result = wirer.wire(_make_agent_def(), _make_defaults())
 
         manifests = result["technique_manifests"]
-        # Work sheet should have both default (github, mateship) and agent (symbols-python)
+        # Work sheet should have both default (github, mateship) and agent (code-symbols)
         work_manifest = manifests.get(3, "")
         assert "github" in work_manifest.lower() or "symbols" in work_manifest.lower()
 
     def test_technique_doc_wiring(self, tmp_path: Path) -> None:
-        """Technique documents are wired as cadenza injections."""
+        """Skill documents are wired for runtime technique injection."""
         # Create a technique document
         tech_dir = tmp_path / "techniques"
         tech_dir.mkdir()
-        (tech_dir / "mateship.md").write_text("# Mateship Protocol\n\nShare findings.")
+        doc = tech_dir / "mateship.md"
+        doc.write_text("# Mateship Protocol\n\nShare findings.")
 
         wirer = TechniqueWirer(techniques_dir=tech_dir)
         result = wirer.wire(_make_agent_def(), _make_defaults())
 
-        cadenzas = result["cadenzas"]
-        # Mateship is active on recon (sheet 1)
-        has_mateship = False
-        for items in cadenzas.values():
-            for item in items:
-                if "mateship" in item.get("file", ""):
-                    has_mateship = True
-                    break
-        assert has_mateship
+        assert result["cadenzas"] == {}
+        assert result["runtime_techniques"]["mateship"]["config"]["path"] == str(doc)
+
+    def test_runtime_techniques_expand_named_phases_to_sheet_numbers(
+        self, tmp_path: Path
+    ) -> None:
+        """Runtime techniques preserve names and include concrete sheet phases."""
+        tech_dir = tmp_path / "techniques"
+        tech_dir.mkdir()
+        doc = tech_dir / "mateship.md"
+        doc.write_text("# Mateship Protocol\n\nShare findings.")
+
+        wirer = TechniqueWirer(techniques_dir=tech_dir)
+        result = wirer.wire(_make_agent_def(), _make_defaults())
+
+        runtime = result["runtime_techniques"]
+        assert "recon" in runtime["mateship"]["phases"]
+        assert "1" in runtime["mateship"]["phases"]
+        assert "work" in runtime["mateship"]["phases"]
+        assert "3" in runtime["mateship"]["phases"]
+        assert runtime["mateship"]["config"]["path"] == str(doc)
+        assert "3" in runtime["github"]["phases"]
+        assert "3" in runtime["a2a"]["phases"]
 
     def test_empty_techniques(self) -> None:
         """Works with no techniques defined."""

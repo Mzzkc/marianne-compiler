@@ -428,9 +428,8 @@ def _slugify(name: str) -> str:
     for ch in slug:
         if ch.isalnum() or ch == "-":
             result.append(ch)
-        elif ch in (" ", "+", "_"):
-            if result and result[-1] != "-":
-                result.append("-")
+        elif ch in (" ", "+", "_") and result and result[-1] != "-":
+            result.append("-")
         # else: drop
     return "".join(result).strip("-")
 

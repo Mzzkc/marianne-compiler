@@ -1,13 +1,14 @@
-"""Technique wirer — injects technique manifests into cadenza context.
+"""Technique wirer — lowers compiler technique declarations.
 
 Reads agent technique declarations and:
-- Injects technique manifests as cadenzas for relevant phases
-- Configures MCP server access per phase
-- Wires A2A agent card and inbox cadenzas
-- Injects memory protocol and mateship skills as cadenzas
+- Builds per-phase technique manifests for generated prompts
+- Emits runtime ``techniques:`` declarations with skill document paths
+- Configures MCP server access per phase through runtime declarations
+- Wires A2A agent card metadata
 
 Each phase, the agent receives a technique manifest telling them what
-tools are available right now.
+tools are available right now. The baton runtime is responsible for resolving
+active techniques and injecting skill documents exactly once at sheet dispatch.
 """
 
 from __future__ import annotations
@@ -16,17 +17,17 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from marianne_compiler.sheets import SHEET_PHASE, SHEETS_PER_CYCLE
+from marianne_compiler.sheets import PHASE_MAP, SHEET_PHASE, SHEETS_PER_CYCLE
 
 _logger = logging.getLogger(__name__)
 
 
 class TechniqueWirer:
-    """Wires technique declarations into per-sheet cadenza context.
+    """Wires technique declarations into prompts and runtime declarations.
 
     Reads agent technique configs and produces:
     1. Technique manifests (markdown) per phase
-    2. Per-sheet cadenza injections referencing technique docs
+    2. Runtime technique declarations with explicit skill document paths
     3. A2A agent card config for registration
     """
 
@@ -56,7 +57,8 @@ class TechniqueWirer:
 
         Returns:
             Dict with keys:
-                ``cadenzas``: dict[int, list[dict]] — per-sheet cadenza additions
+                ``cadenzas``: empty compatibility mapping; runtime technique
+                    injection owns skill-document loading.
                 ``agent_card``: dict | None — A2A agent card if a2a_skills defined
                 ``technique_manifests``: dict[int, str] — per-sheet manifest text
         """
@@ -66,7 +68,6 @@ class TechniqueWirer:
         if isinstance(agent_techniques, dict):
             merged_techniques.update(agent_techniques)
 
-        cadenzas: dict[int, list[dict[str, str]]] = {}
         manifests: dict[int, str] = {}
 
         # Generate per-sheet technique manifests
@@ -79,33 +80,14 @@ class TechniqueWirer:
                 manifest = self._generate_manifest(active_techniques, phase)
                 manifests[sheet_num] = manifest
 
-        # Wire technique document cadenzas
-        for tech_name, tech_config in merged_techniques.items():
-            if not isinstance(tech_config, dict):
-                continue
-            kind = tech_config.get("kind", "skill")
-            phases = tech_config.get("phases", [])
-
-            # Find technique document if available
-            tech_doc_path = self._find_technique_doc(tech_name)
-            if tech_doc_path:
-                for sheet_num in range(1, SHEETS_PER_CYCLE + 1):
-                    phase = SHEET_PHASE.get(sheet_num, "")
-                    if phase in phases or "all" in phases:
-                        if sheet_num not in cadenzas:
-                            cadenzas[sheet_num] = []
-                        cadenzas[sheet_num].append({
-                            "file": str(tech_doc_path),
-                            "as": "skill" if kind == "skill" else "tool",
-                        })
-
         # Build A2A agent card
         agent_card = self._build_agent_card(agent_def)
 
         return {
-            "cadenzas": cadenzas,
+            "cadenzas": {},
             "agent_card": agent_card,
             "technique_manifests": manifests,
+            "runtime_techniques": self._build_runtime_techniques(merged_techniques),
         }
 
     def _get_active_techniques(
@@ -215,3 +197,47 @@ class TechniqueWirer:
                 if isinstance(s, dict) and "id" in s
             ],
         }
+
+    def _build_runtime_techniques(
+        self,
+        techniques: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        """Build top-level runtime technique declarations for JobConfig.
+
+        The baton currently resolves active techniques using the sheet's
+        movement value, which is numeric for compiler-generated scores.
+        Preserve semantic phase names for readability, and add concrete sheet
+        numbers as strings so runtime A2A/MCP resolution can match.
+        """
+        runtime: dict[str, dict[str, Any]] = {}
+        for name, config in techniques.items():
+            if not isinstance(config, dict):
+                continue
+
+            item = dict(config)
+            phases = item.get("phases", [])
+            expanded: list[str] = []
+            seen: set[str] = set()
+            for phase in phases:
+                phase_str = str(phase)
+                if phase_str not in seen:
+                    expanded.append(phase_str)
+                    seen.add(phase_str)
+                for sheet_num in PHASE_MAP.get(phase_str, []):
+                    sheet_str = str(sheet_num)
+                    if sheet_str not in seen:
+                        expanded.append(sheet_str)
+                        seen.add(sheet_str)
+
+            item["phases"] = expanded
+
+            if item.get("kind", "skill") == "skill":
+                doc = self._find_technique_doc(name)
+                if doc:
+                    cfg = dict(item.get("config", {}))
+                    cfg.setdefault("path", str(doc))
+                    item["config"] = cfg
+
+            runtime[name] = item
+
+        return runtime

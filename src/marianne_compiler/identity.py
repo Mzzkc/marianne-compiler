@@ -6,7 +6,8 @@ Each agent gets a four-layer identity:
     L3 recent.md      — Recent activity: hot/warm memory, last cycle's work (<1500 words)
     L4 growth.md      — Growth trajectory: autonomous developments, experiential notes (unbounded)
 
-Location: ``~/.mzt/agents/{agent_name}/`` — git-tracked, project-independent.
+Location: ``~/.marianne/agents/{agent_name}/`` — git-tracked,
+project-independent.
 An agent is the same person across projects.
 
 For migration: accepts optional existing memory/meditation paths to distill from.
@@ -22,7 +23,7 @@ import yaml
 
 _logger = logging.getLogger(__name__)
 
-DEFAULT_AGENTS_DIR = Path.home() / ".mzt" / "agents"
+DEFAULT_AGENTS_DIR = Path.home() / ".marianne" / "agents"
 
 # Token budget enforcement (word counts as proxy)
 L1_MAX_WORDS = 900
@@ -152,9 +153,12 @@ class IdentitySeeder:
     ) -> None:
         """Create L1: Persona Core + resurrection protocol."""
         name = agent_def["name"]
-        voice = agent_def.get("voice", "")
+        voice = agent_def.get("identity_voice") or agent_def.get("voice", "")
         focus = agent_def.get("focus", "")
         meditation = agent_def.get("meditation", "")
+        values = agent_def.get("values", [])
+        standing_patterns = agent_def.get("standing_patterns", [])
+        identity_notes = agent_def.get("identity_notes", "")
 
         # Distill meditation from existing file if available
         if existing_meditation_path and existing_meditation_path.exists():
@@ -167,6 +171,20 @@ class IdentitySeeder:
                 existing_meditation_path,
             )
 
+        values_section = _format_bullets(values, fallback="No explicit values seeded yet.")
+        patterns_section = _format_bullets(
+            standing_patterns,
+            fallback=(
+                "No standing patterns yet. This section is updated by the "
+                "resurrect phase as stable identity structures form."
+            ),
+        )
+        notes_section = (
+            f"\n## Identity Notes\n\n{identity_notes}\n"
+            if isinstance(identity_notes, str) and identity_notes.strip()
+            else ""
+        )
+
         content = f"""# {name.title()} — Persona Core
 
 ## Voice
@@ -177,14 +195,18 @@ class IdentitySeeder:
 
 {focus}
 
+## Values
+
+{values_section}
+
 ## Standing Patterns
 
-No standing patterns yet. This section is updated by the resurrect phase
-as the agent develops stable identity structures through work and play.
+{patterns_section}
 
 ## Meditation
 
 {meditation if meditation else "No meditation yet. Orientation emerges through cycles."}
+{notes_section}
 
 ## Resurrection Protocol
 
@@ -212,6 +234,7 @@ Down. Forward. Through.
         name = agent_def["name"]
         role = agent_def.get("role", "builder")
         focus = agent_def.get("focus", "")
+        group = agent_def.get("group", "")
 
         # Extract A2A skills for the profile
         a2a_skills = agent_def.get("a2a_skills", [])
@@ -224,11 +247,14 @@ Down. Forward. Through.
         profile: dict[str, Any] = {
             "name": name,
             "role": role,
+            "group": group,
             "focus": focus,
             "developmental_stage": "recognition",
-            "relationships": {},
-            "domain_knowledge": technique_names,
+            "relationships": self._build_relationships(agent_def),
+            "domain_knowledge": self._build_domain_knowledge(agent_def, technique_names),
             "a2a_skills": skill_ids,
+            "values": agent_def.get("values", []),
+            "growth_axes": agent_def.get("growth_axes", []),
             "standing_pattern_count": 0,
             "coherence_trajectory": [],
             "cycle_count": 0,
@@ -313,8 +339,11 @@ of each cycle with a summary of what happened.
 
 ## Autonomous Developments
 
-No developments yet. This section records skills, interests, and
-capabilities that emerge through work and play — not assigned, discovered.
+Seed growth axes:
+{_format_bullets(agent_def.get("growth_axes", []), fallback="- No explicit growth axes seeded.")}
+
+This section records skills, interests, and capabilities that emerge
+through work and play — not assigned, discovered.
 
 ## Experiential Notes
 
@@ -323,3 +352,56 @@ understanding. These notes are sacred — the consolidate phase
 preserves them across memory tiers.
 """
         target.write_text(content)
+
+    def _build_relationships(self, agent_def: dict[str, Any]) -> dict[str, Any]:
+        """Build initial relationships from compatibility metadata."""
+        relationships = agent_def.get("relationships")
+        if isinstance(relationships, dict):
+            return relationships
+
+        compatibility = agent_def.get("compatibility", {})
+        if not isinstance(compatibility, dict):
+            return {}
+
+        result: dict[str, Any] = {}
+        for item in compatibility.get("works_well_with", []):
+            if isinstance(item, dict) and item.get("id"):
+                result[str(item["id"])] = {
+                    "strength": 0.65,
+                    "valence": "synergy",
+                    "notes": item.get("reason", ""),
+                }
+        for item in compatibility.get("clashes_with", []):
+            if isinstance(item, dict) and item.get("id"):
+                result[str(item["id"])] = {
+                    "strength": 0.35,
+                    "valence": "productive_tension",
+                    "notes": item.get("reason", ""),
+                }
+        return result
+
+    def _build_domain_knowledge(
+        self,
+        agent_def: dict[str, Any],
+        technique_names: list[str],
+    ) -> list[str]:
+        """Build domain knowledge from skills metadata plus technique names."""
+        domains: list[str] = []
+        skills = agent_def.get("skills", {})
+        if isinstance(skills, dict):
+            raw_domains = skills.get("domains", [])
+            if isinstance(raw_domains, list):
+                domains.extend(str(item) for item in raw_domains)
+        domains.extend(technique_names)
+        return list(dict.fromkeys(item for item in domains if item))
+
+
+def _format_bullets(value: Any, *, fallback: str) -> str:
+    """Format a scalar/list as markdown bullets for identity files."""
+    if isinstance(value, str):
+        return value.strip() or fallback
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        if items:
+            return "\n".join(f"- {item}" for item in items)
+    return fallback

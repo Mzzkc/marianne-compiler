@@ -18,15 +18,16 @@ from marianne_compiler.instruments import InstrumentResolver
 from marianne_compiler.pipeline import CompilationPipeline
 from marianne_compiler.prompt_template import build_phase_template
 from marianne_compiler.sheets import SHEETS_PER_CYCLE
+from marianne_compiler.validations import ValidationGenerator
 
 
 def _defaults_with_chain() -> dict[str, object]:
     """The #214 reproducer shape: a 7-entry chain with per-model entries."""
     chain = [
-        {"instrument": "openrouter", "model": "meta-llama/llama-4-maverick"},
+        {"instrument": "openrouter", "model": "zhipu/glm-4.5-air"},
         {"instrument": "openrouter", "model": "google/gemma-4"},
         {"instrument": "openrouter", "model": "nvidia/nemotron-3"},
-        {"instrument": "openrouter", "model": "zhipu/glm-4.5-air"},
+        {"instrument": "openrouter", "model": "zhipu/glm-4.5"},
         {"instrument": "gemini-cli"},
         {"instrument": "opencode"},
         {"instrument": "claude-code", "model": "claude-sonnet-4-5"},
@@ -93,6 +94,39 @@ class TestTemplate211:
         # Previously-dead values are now template-referenced variables.
         assert prompt["variables"]["stakes"] == "the stakes"
         assert prompt["variables"]["thinking_method"] == "TSVS"
+
+    def test_phase_output_section_labels_match_content_validations(self) -> None:
+        """Generated instructions must name the exact section labels validators require."""
+        template = build_phase_template()
+        validations = ValidationGenerator().generate(
+            {"name": "a", "voice": "v", "focus": "f"},
+            {},
+        )
+
+        for rule in validations:
+            if rule.get("type") != "content_contains":
+                continue
+            condition = str(rule["condition"])
+            assert condition.startswith("stage == ")
+            stage = int(condition.removeprefix("stage == "))
+            branch = self._template_branch(template, stage)
+            assert rule["pattern"] in branch
+
+    @staticmethod
+    def _template_branch(template: str, stage: int) -> str:
+        keyword = "if" if stage == 1 else "elif"
+        start_marker = f"{{% {keyword} stage == {stage} %}}"
+        start = template.index(start_marker)
+        next_markers = [
+            marker
+            for marker in (
+                template.find("{% elif stage ==", start + len(start_marker)),
+                template.find("{% endif %}", start + len(start_marker)),
+            )
+            if marker != -1
+        ]
+        end = min(next_markers)
+        return template[start:end]
 
 
 class TestManifests212:

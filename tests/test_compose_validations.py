@@ -38,6 +38,78 @@ class TestValidationGenerator:
         assert recon_vals[0]["type"] == "file_exists"
         assert "stage == 1" in recon_vals[0]["condition"]
 
+    def test_fleet_score_count_truth_check_is_opt_in(self) -> None:
+        """Fleet score-count claim validation is generated only when requested."""
+        gen = ValidationGenerator()
+
+        without_check = gen.generate(_make_agent_def(), {})
+        assert not any(
+            v.get("description") == "Recon score-count claims match disk for canyon"
+            for v in without_check
+        )
+
+        with_check = gen.generate(
+            _make_agent_def(),
+            {"fleet_score_count_truth_check": True},
+        )
+        checks = [
+            v
+            for v in with_check
+            if v.get("description") == "Recon score-count claims match disk for canyon"
+        ]
+        assert len(checks) == 1
+        assert checks[0]["type"] == "command_succeeds"
+        assert "agent\\s+scores?" in checks[0]["command"]
+        assert "stage == 1" in checks[0]["condition"]
+
+    def test_cadenza_completion_validation_is_opt_in(self) -> None:
+        """Shared cadenza completion validation follows configured active phases."""
+        gen = ValidationGenerator()
+
+        without_check = gen.generate(_make_agent_def(), {})
+        assert not any(
+            v.get("description", "").startswith("Cadenza completion state")
+            for v in without_check
+        )
+
+        with_check = gen.generate(
+            _make_agent_def(),
+            {
+                "cadenza_completion_validation": True,
+                "cadenzas": {
+                    "active": [
+                        {
+                            "directory": "{{workspace}}/shared/active",
+                            "as": "context",
+                            "phases": ["recon", "plan", "work", "inspect"],
+                        }
+                    ]
+                },
+            },
+        )
+        checks = [
+            v
+            for v in with_check
+            if v.get("description", "").startswith("Cadenza completion state")
+        ]
+
+        assert [v["condition"] for v in checks] == [
+            "stage == 1",
+            "stage == 2",
+            "stage == 3",
+            "stage == 7",
+        ]
+        assert checks[1]["description"] == "Cadenza completion state for canyon plan"
+        assert "01-task-board.md" in checks[1]["command"]
+        assert "02-agent-status.md" in checks[1]["command"]
+        assert "COORDINATION UPDATE BLOCKED:" in checks[1]["command"]
+        assert "date -u +%Y-%m-%dT%H:%MZ" in checks[1]["command"]
+        assert "timedelta(minutes=5)" in checks[1]["command"]
+        assert "cycle-state/canyon-plan.md" in checks[1]["command"]
+        assert checks[3]["description"] == "Cadenza completion state for canyon inspect"
+        assert "ARTIFACT_REL='cycle-state/canyon-inspection.md'" in checks[3]["command"]
+        assert "cycle-state/canyon-inspect.md" not in checks[3]["command"]
+
     def test_generates_plan_validation(self) -> None:
         """Generates a file_exists check for the plan document."""
         gen = ValidationGenerator()
@@ -87,9 +159,8 @@ class TestValidationGenerator:
         result = gen.generate(_make_agent_def("forge"), {})
 
         for v in result:
-            if "path" in v:
-                if "cycle-state" in v["path"]:
-                    assert "forge" in v["path"]
+            if "path" in v and "cycle-state" in v["path"]:
+                assert "forge" in v["path"]
 
     def test_maturity_and_budget_with_dirs(self) -> None:
         """Maturity and token budget checks generated when dirs provided."""
@@ -188,8 +259,8 @@ class TestValidationGenerator:
                     assert "{workspace}" in path
                     assert "{{workspace}}" not in path
 
-    def test_cli_instrument_validations_are_command_succeeds(self) -> None:
-        """CLI instrument sheets (temperature, maturity, budget) use command_succeeds."""
+    def test_cli_instrument_validations_cover_markers_reports_and_scripts(self) -> None:
+        """CLI sheets validate generated artifacts and optional script checks."""
         gen = ValidationGenerator()
         result = gen.generate(
             _make_agent_def(), {},
@@ -197,23 +268,34 @@ class TestValidationGenerator:
             instruments_dir="/test/instruments",
         )
 
-        # Temperature check (stage 4), maturity (stage 11), budget (stage 12)
-        cli_stages = {"stage == 4", "stage == 11", "stage == 12"}
         cli_vals = [
-            v for v in result if v.get("condition", "") in cli_stages
+            v
+            for v in result
+            if any(
+                label in v.get("description", "").lower()
+                for label in ("temperature", "maturity", "token budget")
+            )
         ]
 
         assert len(cli_vals) >= 3, (
             f"Expected at least 3 CLI instrument validations, got {len(cli_vals)}"
         )
-        for v in cli_vals:
-            assert v["type"] == "command_succeeds", (
-                f"CLI validation at {v['condition']} should be command_succeeds, "
-                f"got {v['type']}"
-            )
+        assert any(
+            v["type"] == "command_succeeds" and "temperature-canyon" in v["command"]
+            for v in cli_vals
+        )
+        assert any(
+            v["type"] == "file_exists"
+            and v.get("path") == "{workspace}/cycle-state/canyon-maturity-report.yaml"
+            for v in cli_vals
+        )
+        assert any(
+            v["type"] == "command_succeeds" and "token-budget-check.sh" in v["command"]
+            for v in cli_vals
+        )
 
     def test_temperature_check_validation(self) -> None:
-        """Temperature check validation generated when dirs provided."""
+        """Temperature marker and optional script validations are generated."""
         gen = ValidationGenerator()
         result = gen.generate(
             _make_agent_def(), {},
@@ -225,19 +307,26 @@ class TestValidationGenerator:
             v for v in result if "temperature" in v.get("description", "").lower()
         ]
         assert len(temp_vals) >= 1
-        assert temp_vals[0]["type"] == "command_succeeds"
-        assert "stage == 4" in temp_vals[0]["condition"]
-        assert "temperature-check.sh" in temp_vals[0]["command"]
+        assert any(
+            v["type"] == "command_succeeds"
+            and "stage == 4" in v["condition"]
+            and "temperature-canyon-play" in v["command"]
+            and "temperature-canyon-work" in v["command"]
+            for v in temp_vals
+        )
+        assert any("temperature-check.sh" in v.get("command", "") for v in temp_vals)
 
     def test_no_temperature_check_without_dirs(self) -> None:
-        """Temperature check is NOT generated when dirs are missing."""
+        """Temperature marker validation is generated without external scripts."""
         gen = ValidationGenerator()
         result = gen.generate(_make_agent_def(), {})
 
         temp_vals = [
             v for v in result if "temperature" in v.get("description", "").lower()
         ]
-        assert len(temp_vals) == 0
+        assert len(temp_vals) == 1
+        assert "temperature-canyon-play" in temp_vals[0]["command"]
+        assert "temperature-check.sh" not in temp_vals[0]["command"]
 
     def test_coverage_validations_on_inspect(self) -> None:
         """Coverage validations from defaults applied to inspect sheet (stage 7)."""
