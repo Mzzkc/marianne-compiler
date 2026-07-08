@@ -105,6 +105,8 @@ class TestValidationGenerator:
         assert "COORDINATION UPDATE BLOCKED:" in checks[1]["command"]
         assert "date -u +%Y-%m-%dT%H:%MZ" in checks[1]["command"]
         assert "timedelta(minutes=5)" in checks[1]["command"]
+        assert "global numeric cadenza id" in checks[1]["command"]
+        assert "repeats concrete cadenza id" in checks[1]["command"]
         assert "cycle-state/canyon-plan.md" in checks[1]["command"]
         assert checks[3]["description"] == "Cadenza completion state for canyon inspect"
         assert "ARTIFACT_REL='cycle-state/canyon-inspection.md'" in checks[3]["command"]

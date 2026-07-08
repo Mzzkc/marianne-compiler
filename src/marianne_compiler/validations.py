@@ -362,6 +362,7 @@ class ValidationGenerator:
             """python - <<'PY'
 from datetime import UTC, datetime, timedelta
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -397,6 +398,40 @@ def rows(path: Path) -> list[list[str]]:
         parsed.append(cells)
     return parsed
 
+cadenza_id_files = [
+    "01-task-board.md",
+    "03-findings.md",
+    "04-decision-log.md",
+    "06-handoff-index.md",
+]
+
+def cadenza_id_errors() -> list[str]:
+    errors: list[str] = []
+    for filename in cadenza_id_files:
+        path = workspace / "shared" / "active" / filename
+        seen: dict[str, int] = {}
+        for cells in rows(path):
+            if not cells:
+                continue
+            row_id = cells[0]
+            if not row_id:
+                continue
+            if "{" in row_id or "}" in row_id:
+                continue
+            seen[row_id] = seen.get(row_id, 0) + 1
+            if re.fullmatch(r"(?:[A-Z]+-)?\\d+", row_id):
+                errors.append(
+                    f"{filename} uses global numeric cadenza id {row_id!r}; "
+                    "use an owner-scoped id such as agent-T-001"
+                )
+        for row_id, count in seen.items():
+            if count > 1:
+                errors.append(
+                    f"{filename} repeats concrete cadenza id {row_id!r} "
+                    f"{count} times"
+                )
+    return errors
+
 task_ok = False
 for cells in rows(task_board):
     if len(cells) < 5:
@@ -423,7 +458,7 @@ for cells in rows(status_board):
         status_updated = cells[5]
         break
 
-errors: list[str] = []
+errors = cadenza_id_errors()
 if not task_ok and not blocked_for("01-task-board.md"):
     errors.append(
         f"missing done task-board row for {agent} {phase} with evidence {artifact_rel}"
