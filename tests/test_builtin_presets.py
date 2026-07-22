@@ -32,13 +32,13 @@ def test_generic_fleet_preset_loads() -> None:
         tier_config["primary"].get("instrument") != "codex-cli"
         for tier_config in default_instruments.values()
     )
-    gemini_flash_primary_tiers = {
+    gemini_flash_medium_primary_tiers = {
         tier
         for tier, tier_config in default_instruments.items()
         if tier_config["primary"].get("instrument") == "antigravity"
-        and tier_config["primary"].get("model") == "gemini-3.5-flash"
+        and tier_config["primary"].get("model") == "gemini-3.5-flash-medium"
     }
-    assert gemini_flash_primary_tiers == {
+    assert gemini_flash_medium_primary_tiers == {
         "recon",
         "plan",
         "inspect",
@@ -78,7 +78,10 @@ def test_generic_fleet_preset_compiles(tmp_path: Path) -> None:
     assert "symbols-python" not in canyon["techniques"]
     assert canyon["agent_card"]["name"] == "canyon"
     assert "claude-code--glm-5.2-1m" in canyon["instruments"]
-    assert "antigravity--gemini-3.5-flash" in canyon["instruments"]
+    assert "antigravity--gemini-3.5-flash-medium" in canyon["instruments"]
+    assert "antigravity--gemini-3.5-flash-low" in canyon["instruments"]
+    assert "antigravity--gemini-3.5-flash" not in canyon["instruments"]
+    assert "antigravity--gemini-3.5-flash-lite" not in canyon["instruments"]
     assert "gemini-cli--gemini-3.5-flash" not in canyon["instruments"]
     identity_dir = canyon["prompt"]["variables"]["agent_identity_dir"]
     assert str(tmp_path / "agents" / "canyon") in identity_dir
