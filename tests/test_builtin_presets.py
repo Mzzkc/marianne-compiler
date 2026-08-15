@@ -77,7 +77,7 @@ def test_generic_fleet_preset_compiles(tmp_path: Path) -> None:
     assert "11" not in canyon["techniques"]["filesystem"]["phases"]
     assert "symbols-python" not in canyon["techniques"]
     assert canyon["agent_card"]["name"] == "canyon"
-    assert "claude-code--glm-5.2-1m" in canyon["instruments"]
+    assert "claude-code--glm-5.3-1m" in canyon["instruments"]
     assert "antigravity--gemini-3.5-flash-medium" in canyon["instruments"]
     assert "antigravity--gemini-3.5-flash-low" in canyon["instruments"]
     assert "antigravity--gemini-3.5-flash" not in canyon["instruments"]

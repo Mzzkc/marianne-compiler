@@ -325,7 +325,7 @@ class TestAvailabilityFiltering:
                         },
                         "fallbacks": [
                             {"instrument": "gemini-cli", "model": "gemini-3.5-flash"},
-                            {"instrument": "claude-code", "model": "glm-5.2[1m]"},
+                            {"instrument": "claude-code", "model": "glm-5.3[1m]"},
                         ],
                     }
                 }
@@ -339,7 +339,7 @@ class TestAvailabilityFiltering:
         )
 
         work = filtered["defaults"]["instruments"]["work"]
-        assert work["primary"] == {"instrument": "claude-code", "model": "glm-5.2[1m]"}
+        assert work["primary"] == {"instrument": "claude-code", "model": "glm-5.3[1m]"}
         assert work["fallbacks"] == []
 
     def test_filter_removes_unavailable_agent_override(self) -> None:
@@ -347,7 +347,7 @@ class TestAvailabilityFiltering:
             "defaults": {
                 "instruments": {
                     "work": {
-                        "primary": {"instrument": "claude-code", "model": "glm-5.2[1m]"},
+                        "primary": {"instrument": "claude-code", "model": "glm-5.3[1m]"},
                         "fallbacks": [{"instrument": "gemini-cli"}],
                     }
                 }
@@ -370,5 +370,5 @@ class TestAvailabilityFiltering:
         )
 
         work = filtered["agents"][0]["instruments"]["work"]
-        assert work["primary"] == {"instrument": "claude-code", "model": "glm-5.2[1m]"}
+        assert work["primary"] == {"instrument": "claude-code", "model": "glm-5.3[1m]"}
         assert work["fallbacks"] == []

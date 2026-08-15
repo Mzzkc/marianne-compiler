@@ -33,7 +33,7 @@ defaults:
       - instrument: claude-code
         model: glm-5-Turbo
       - instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
     plan:
       primary:
         instrument: antigravity
@@ -42,11 +42,11 @@ defaults:
       - instrument: claude-code
         model: glm-5-Turbo
       - instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
     work:
       primary:
         instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
       fallbacks:
       - instrument: antigravity
         model: gemini-3.5-flash-medium
@@ -66,11 +66,11 @@ defaults:
         model: gemini-3.5-flash-medium
       - instrument: codex-cli
       - instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
     play:
       primary:
         instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
       fallbacks:
       - instrument: antigravity
         model: gemini-3.5-flash-medium
@@ -81,7 +81,7 @@ defaults:
         model: gemini-3.5-flash-medium
       fallbacks:
       - instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
       - instrument: codex-cli
       - instrument: claude-code
         model: glm-5-Turbo
@@ -93,7 +93,7 @@ defaults:
       - instrument: claude-code
         model: glm-5-Turbo
       - instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
     consolidate:
       primary:
         instrument: antigravity
@@ -102,7 +102,7 @@ defaults:
       - instrument: claude-code
         model: glm-5-Turbo
       - instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
     reflect:
       primary:
         instrument: claude-code
@@ -111,11 +111,11 @@ defaults:
       - instrument: antigravity
         model: gemini-3.5-flash-medium
       - instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
     resurrect:
       primary:
         instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
       fallbacks:
       - instrument: antigravity
         model: gemini-3.5-flash-medium
@@ -266,7 +266,7 @@ agents:
     work:
       primary:
         instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
   a2a_skills:
   - id: strategic-direction
     description: Set technical direction and issue strategic directives
@@ -591,7 +591,7 @@ agents:
     work:
       primary:
         instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
   techniques:
     canyon-specialist:
       kind: skill
@@ -685,7 +685,7 @@ agents:
     work:
       primary:
         instrument: claude-code
-        model: glm-5.2[1m]
+        model: glm-5.3[1m]
   techniques:
     foundation-specialist:
       kind: skill
