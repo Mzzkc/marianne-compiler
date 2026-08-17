@@ -19,6 +19,7 @@ def test_generic_fleet_preset_loads() -> None:
     assert "llama-4-maverick" not in str(config).lower()
     assert "kimi" not in str(config).lower()
     assert "gemini-cli" not in str(config)
+    assert "gemini-3.5-flash-" not in yaml.safe_dump(config, sort_keys=True)
 
     default_instruments = config["defaults"]["instruments"]
     codex_fallback_tiers = {
@@ -36,7 +37,7 @@ def test_generic_fleet_preset_loads() -> None:
         tier
         for tier, tier_config in default_instruments.items()
         if tier_config["primary"].get("instrument") == "antigravity"
-        and tier_config["primary"].get("model") == "gemini-3.5-flash-medium"
+        and tier_config["primary"].get("model") == "gemini-3.7-flash-medium"
     }
     assert gemini_flash_medium_primary_tiers == {
         "recon",
@@ -78,10 +79,9 @@ def test_generic_fleet_preset_compiles(tmp_path: Path) -> None:
     assert "symbols-python" not in canyon["techniques"]
     assert canyon["agent_card"]["name"] == "canyon"
     assert "claude-code--glm-5.3-1m" in canyon["instruments"]
-    assert "antigravity--gemini-3.5-flash-medium" in canyon["instruments"]
-    assert "antigravity--gemini-3.5-flash-low" in canyon["instruments"]
-    assert "antigravity--gemini-3.5-flash" not in canyon["instruments"]
-    assert "antigravity--gemini-3.5-flash-lite" not in canyon["instruments"]
+    assert "antigravity--gemini-3.7-flash-medium" in canyon["instruments"]
+    assert "antigravity--gemini-3.7-flash-low" in canyon["instruments"]
+    assert "gemini-3.5-flash-" not in yaml.safe_dump(canyon, sort_keys=True)
     assert "gemini-cli--gemini-3.5-flash" not in canyon["instruments"]
     identity_dir = canyon["prompt"]["variables"]["agent_identity_dir"]
     assert str(tmp_path / "agents" / "canyon") in identity_dir

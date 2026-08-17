@@ -28,7 +28,7 @@ defaults:
     recon:
       primary:
         instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       fallbacks:
       - instrument: claude-code
         model: glm-5-Turbo
@@ -37,7 +37,7 @@ defaults:
     plan:
       primary:
         instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       fallbacks:
       - instrument: claude-code
         model: glm-5-Turbo
@@ -49,9 +49,9 @@ defaults:
         model: glm-5.3[1m]
       fallbacks:
       - instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       - instrument: antigravity
-        model: gemini-3.5-flash-low
+        model: gemini-3.7-flash-low
       - instrument: codex-cli
     cli:
       primary:
@@ -63,7 +63,7 @@ defaults:
         model: glm-5-Turbo
       fallbacks:
       - instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       - instrument: codex-cli
       - instrument: claude-code
         model: glm-5.3[1m]
@@ -73,12 +73,12 @@ defaults:
         model: glm-5.3[1m]
       fallbacks:
       - instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       - instrument: codex-cli
     inspect:
       primary:
         instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       fallbacks:
       - instrument: claude-code
         model: glm-5.3[1m]
@@ -88,7 +88,7 @@ defaults:
     aar:
       primary:
         instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       fallbacks:
       - instrument: claude-code
         model: glm-5-Turbo
@@ -97,7 +97,7 @@ defaults:
     consolidate:
       primary:
         instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       fallbacks:
       - instrument: claude-code
         model: glm-5-Turbo
@@ -109,7 +109,7 @@ defaults:
         model: glm-5-Turbo
       fallbacks:
       - instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
       - instrument: claude-code
         model: glm-5.3[1m]
     resurrect:
@@ -118,7 +118,7 @@ defaults:
         model: glm-5.3[1m]
       fallbacks:
       - instrument: antigravity
-        model: gemini-3.5-flash-medium
+        model: gemini-3.7-flash-medium
   techniques:
     a2a:
       kind: protocol
