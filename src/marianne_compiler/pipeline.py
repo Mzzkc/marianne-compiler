@@ -6,6 +6,7 @@ agent, plus identity directories, fleet configs, and shared technique modules.
 
 from __future__ import annotations
 
+import copy
 import logging
 from pathlib import Path
 from typing import Any
@@ -344,6 +345,17 @@ class CompilationPipeline:
                 # StrictUndefined rendering never breaks.
                 "stakes": stakes or "",
                 "thinking_method": thinking_method or "",
+                "marianne_agent": {
+                    "schema_version": 1,
+                    "agent_id": name,
+                    "score_shape": str(defaults.get("score_shape", "full-lifecycle")),
+                    "phase_requirements": copy.deepcopy(
+                        defaults.get("phase_requirements", {})
+                    ),
+                    "routing_receipts": copy.deepcopy(
+                        defaults.get("routing_receipts", {})
+                    ),
+                },
             },
         }
 
@@ -418,15 +430,16 @@ class CompilationPipeline:
         # {self}; materialize it to a daemon-safe path. Prefer {workspace}
         # when the score is workspace-local so generated fleets are movable.
         score_path_str = self._self_chain_job_path(self_path, workspace)
-        score["on_success"] = [
-            {
-                "type": "run_job",
-                "job_path": score_path_str,
-                "detached": True,
-                "fresh": True,
-                "pause_before_chain": pause_before,
-            }
-        ]
+        if defaults.get("self_chain", True):
+            score["on_success"] = [
+                {
+                    "type": "run_job",
+                    "job_path": score_path_str,
+                    "detached": True,
+                    "fresh": True,
+                    "pause_before_chain": pause_before,
+                }
+            ]
 
         return score
 

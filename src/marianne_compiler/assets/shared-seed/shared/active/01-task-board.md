@@ -1,6 +1,9 @@
 # Task Board
 
 Use this file for current-cycle claims only. Do not use it as a full backlog.
+Read all four direct files in this active cadenza before planning. Urgent
+directives control ordinary plans. Durable coordination is required even when
+live A2A delegation is available.
 
 ## Active
 
@@ -32,3 +35,6 @@ If this file changes between read and edit, re-read it and retry only your
 owner-scoped row once. If it changes again, put the detailed task note in your
 cycle-state report and mark the coordination update as blocked there instead of
 looping on this shared table.
+
+Keep this active folder bounded. Put detailed findings, plans, and decisions in
+their durable shared directories and link them from the claim or handoff.

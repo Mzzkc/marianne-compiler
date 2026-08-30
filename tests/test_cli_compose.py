@@ -187,7 +187,7 @@ class TestCliCompose:
 
         assert result.exit_code == 0
         assert "generic-agent-fleet" in result.output
-        assert "Agents: 32" in result.output
+        assert "Agents: 33" in result.output
 
     def test_seed_only(self, tmp_path: Path) -> None:
         """--seed-only creates identities without scores."""
@@ -241,3 +241,67 @@ class TestCliCompose:
         assert "sheet" in score_data
         assert "prompt" in score_data
         assert score_data["sheet"]["total_items"] == 12
+
+    def test_capability_inventory_binds_semantic_phase_routes(self, tmp_path: Path) -> None:
+        """CLI can materialize live-evidenced routes before score generation."""
+        config_path = _create_config(tmp_path)
+        config = yaml.safe_load(config_path.read_text())
+        config["defaults"].pop("instruments")
+        config["defaults"]["phase_requirements"] = {
+            "work": {
+                "required_capabilities": ["file_editing"],
+                "load_bearing": True,
+            }
+        }
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+        inventory_path = tmp_path / "inventory.yaml"
+        inventory_path.write_text(
+            yaml.safe_dump(
+                {
+                    "profiles": [
+                        {
+                            "name": "zai-live",
+                            "available": True,
+                            "provider": "z.ai",
+                            "model": "zai-coding-plan/glm-5.3-flash",
+                            "capabilities": ["file_editing", "vision"],
+                            "context_tokens": 1_000_000,
+                            "priority": 1,
+                            "reliability_class": "standard",
+                            "latency_class": "variable",
+                            "metered_cost": "subscription",
+                            "verified_at": "2099-01-01T00:00:00Z",
+                            "invocation_contract_verified": True,
+                            "entitlement_verified": True,
+                        }
+                    ]
+                },
+                sort_keys=False,
+            )
+        )
+        output_dir = tmp_path / "scores"
+
+        result = runner.invoke(
+            _make_app(),
+            [
+                str(config_path),
+                "--output",
+                str(output_dir),
+                "--agents-dir",
+                str(tmp_path / "agents"),
+                "--capability-inventory",
+                str(inventory_path),
+                "--capability-evidence-at",
+                "2099-01-01T00:30:00Z",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        score = yaml.safe_load((output_dir / "test-agent.yaml").read_text())
+        assert score["sheet"]["per_sheet_instruments"][3] == (
+            "zai-live--glm-5.3-flash"
+        )
+        assert score["instruments"]["zai-live--glm-5.3-flash"]["config"] == {
+            "model": "zai-coding-plan/glm-5.3-flash",
+            "provider": "z.ai",
+        }

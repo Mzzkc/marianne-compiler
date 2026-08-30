@@ -90,6 +90,7 @@ class TestSheetComposer:
 
         prelude = result["prelude"]
         assert any("identity.md" in p.get("file", "") for p in prelude)
+        assert all(item.get("required") is True for item in prelude)
 
     def test_has_cadenzas_per_phase(self) -> None:
         """Cadenzas are defined for relevant phases."""
@@ -103,6 +104,11 @@ class TestSheetComposer:
         # Resurrect should have full identity load
         assert 12 in cadenzas
         assert len(cadenzas[12]) >= 3
+        assert all(
+            item.get("required") is True
+            for items in cadenzas.values()
+            for item in items
+        )
 
     def test_descriptions_for_all_sheets(self) -> None:
         """All 12 sheets have descriptions."""

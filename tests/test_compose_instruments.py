@@ -181,6 +181,16 @@ class TestInstrumentResolver:
         # Most sheets should have fallback chains
         assert len(fallbacks) > 0
 
+    def test_cli_sheets_explicitly_refuse_llm_score_fallbacks(self) -> None:
+        """Raw shell sheets must override score-level AI fallback chains."""
+        resolver = InstrumentResolver()
+        result = resolver.resolve(_make_agent_def(), _make_defaults())
+
+        assert result["per_sheet_instruments"][4] == "cli"
+        assert result["per_sheet_instruments"][11] == "cli"
+        assert result["per_sheet_fallbacks"][4] == []
+        assert result["per_sheet_fallbacks"][11] == []
+
     def test_no_implicit_catalog_tail(self) -> None:
         """Fallback chains contain only the resolved tier's explicit fallbacks."""
         resolver = InstrumentResolver()

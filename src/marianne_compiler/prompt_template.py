@@ -55,7 +55,11 @@ def _exact_section_labels(*sections: str) -> str:
 PHASE_OUTPUTS: dict[str, list[str]] = {
     "recon": [
         "Write `{{ workspace }}/cycle-state/{{ agent_name }}-recon.md`.",
-        _exact_section_labels("OBSERVED", "CHANGED", "CANDIDATES", "RISKS", "EVIDENCE"),
+        _exact_section_labels(
+            "OBSERVED", "CHANGED", "CANDIDATES", "RISKS", "CONTEXT APPLIED", "EVIDENCE",
+        ),
+        "Under CONTEXT APPLIED, identify specific identity/memory/technique/cadenza "
+        "material that affected present judgment; a roster name is not evidence of delivery.",
         "If you state a count of fleet agent scores, derive it from the current "
         "`{{ workspace }}/scores/*.yaml` files and do not estimate.",
     ],
@@ -157,13 +161,14 @@ def build_phase_template(
             lines.extend([
                 "- Do not claim completion unless the required artifact exists.",
                 "- Ground claims in file paths, command output, or observed workspace state.",
-                "- If shared active cadenza files are available in this phase, "
-                "update `shared/active/01-task-board.md` so your owner-scoped "
-                "row for the required artifact is `done`, and update "
-                "`shared/active/02-agent-status.md` to this phase with state "
-                "`complete`; use `date -u +%Y-%m-%dT%H:%MZ` for the `updated` "
-                "column and never append `Z` to local time; if a second write "
-                "conflict blocks either update, "
+                "- If shared active cadenza files are available in this phase, read "
+                "all four direct files: `01-task-board.md`, `02-status.md`, "
+                "`03-urgent-directives.md`, and `04-handoffs.md`. Treat urgent "
+                "directives as controlling. Mark your owner-scoped task claim done "
+                "with the required artifact as evidence; update `02-status.md` in "
+                "its existing form without inventing a schema; add a handoff tuple "
+                "when another owner must continue. If a second write conflict blocks "
+                "a required update, "
                 "write `COORDINATION UPDATE BLOCKED:` in the required artifact "
                 "with the blocked file and reason.",
                 "- If a shared active cadenza file changes while you edit it, "

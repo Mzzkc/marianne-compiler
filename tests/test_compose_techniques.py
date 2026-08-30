@@ -125,6 +125,7 @@ class TestTechniqueWirer:
 
         assert result["cadenzas"] == {}
         assert result["runtime_techniques"]["mateship"]["config"]["path"] == str(doc)
+        assert result["runtime_techniques"]["mateship"]["required"] is True
 
     def test_runtime_techniques_expand_named_phases_to_sheet_numbers(
         self, tmp_path: Path

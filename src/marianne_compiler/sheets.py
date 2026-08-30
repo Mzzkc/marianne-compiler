@@ -15,6 +15,7 @@ Total: 12 sheets per cycle.
 from __future__ import annotations
 
 import logging
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -108,21 +109,133 @@ class SheetComposer:
         # Add command skip rules for play gating. The live score schema uses
         # `skip_when` (formerly skip_when_command).
         skip_when = self._build_skip_when(agent_def, defaults, identity_dir)
+        shape_skip, prompt_extensions = self._build_score_shape(defaults, identity_dir)
+        skip_when.update(shape_skip)
         if skip_when:
             sheet_config["skip_when"] = skip_when
+        if prompt_extensions:
+            sheet_config["prompt_extensions"] = prompt_extensions
 
         return sheet_config
+
+    def _build_score_shape(
+        self,
+        defaults: dict[str, Any],
+        identity_dir: str,
+    ) -> tuple[dict[int, dict[str, Any]], dict[int, list[str]]]:
+        """Return deterministic skips and debt instructions for one run shape."""
+        shape = str(defaults.get("score_shape", "full-lifecycle"))
+        if shape == "full-lifecycle":
+            return {}, {}
+        if shape == "targeted-work":
+            skipped = {4, 6, 9, 10, 11, 12}
+            debt_path = f"{identity_dir}/{'.marianne/pending-lifecycle-debt.yaml'}"
+            return (
+                {
+                    sheet: {
+                        "command": "true",
+                        "description": (
+                            f"Targeted work defers {SHEET_PHASE[sheet]} to lifecycle integration"
+                        ),
+                        "timeout_seconds": 5,
+                    }
+                    for sheet in sorted(skipped)
+                },
+                {
+                    8: [
+                        "This is a bounded targeted engagement, not a counterfeit full lifecycle.",
+                        "Update canonical recent.md with only grounded learning from this "
+                        "engagement; "
+                        "use the stage-1 recent-memory snapshot as the before state and record "
+                        "the canonical file's SHA-256 after the write.",
+                        f"Write `{debt_path}` as YAML after the immediate "
+                        "AAR/recent-memory update.",
+                        "Use schema_version: 1, kind: marianne-lifecycle-debt, this agent name, "
+                        "status: pending, source_engagement, evidence, "
+                        "recent_memory_before_snapshot, "
+                        "recent_memory_before_sha256, "
+                        "recent_memory_after_sha256, and pending_phases containing exactly "
+                        "consolidate (consolidation), reflect (reflection), and resurrect "
+                        "(resurrection). Evidence must be a non-empty list of workspace files, "
+                        "each with exact path and sha256. Do not mark deferred phases complete.",
+                    ]
+                },
+            )
+        if shape == "lifecycle-integration":
+            skipped = {2, 3, 4, 5, 6, 7, 8}
+            metadata = f"{identity_dir}/.marianne"
+            return (
+                {
+                    sheet: {
+                        "command": "true",
+                        "description": (
+                            f"Lifecycle integration omits ordinary {SHEET_PHASE[sheet]} work"
+                        ),
+                        "timeout_seconds": 5,
+                    }
+                    for sheet in sorted(skipped)
+                },
+                {
+                    1: [
+                        f"Read `{metadata}/pending-lifecycle-debt.yaml` when it exists.",
+                        f"Read `{metadata}/pending-seed-conflicts.yaml` when it exists.",
+                        "Inventory every open lifecycle debt and portable-seed conflict; preserve "
+                        "agent authority over all semantic decisions.",
+                    ],
+                    9: [
+                        "Consolidate every grounded pending engagement into canonical "
+                        "recent/profile memory. Record before/after hashes and leave unrelated "
+                        "memory untouched.",
+                    ],
+                    10: [
+                        "Reflect on pending engagements and seed conflicts. Update growth and "
+                        "relationships only where the evidence warrants it.",
+                    ],
+                    12: [
+                        "Adjudicate portable-seed conflicts as the agent, close only debt actually "
+                        "integrated, and use the typed, conflict-bound agent resolution flow when "
+                        "the stage-1 lifecycle inputs captured a seed conflict.",
+                        "Demonstrate later recall of at least one engagement-specific learning; "
+                        "name the source memory and how it changed present judgment.",
+                        "Write `{{ workspace }}/cycle-state/{{ agent_name }}-lifecycle-integration-"
+                        "receipt.yaml` with schema_version: 1, kind: "
+                        "marianne-lifecycle-integration, "
+                        "this agent name, status: integrated, source_debt_sha256, source_memory: "
+                        "recent.md, closed_debt, memory_before_sha256, memory_after_sha256, "
+                        "optional "
+                        "seed_resolution_receipt, and typed later_recall with source_engagement, "
+                        "source_evidence_sha256, recalled_learning, and present_application. The "
+                        "before hash must continue the captured source debt and the after hash "
+                        "must "
+                        "match canonical recent.md after a real transition.",
+                        f"Update `{metadata}/pending-lifecycle-debt.yaml` to status: integrated, "
+                        "preserve its source engagement, and bind it to the source debt and final "
+                        "integration receipt with source_debt_sha256 and "
+                        "integration_receipt_sha256.",
+                    ],
+                },
+            )
+        raise ValueError(
+            "defaults.score_shape must be one of: full-lifecycle, targeted-work, "
+            "lifecycle-integration"
+        )
 
     def _build_prelude(
         self,
         identity_dir: str,
         defaults: dict[str, Any],
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, object]]:
         """Build prelude injections (loaded for ALL sheets)."""
-        prelude: list[dict[str, str]] = []
+        prelude: list[dict[str, object]] = []
 
         # Agent L1 identity is always in prelude
-        prelude.append({"file": f"{identity_dir}/identity.md", "as": "context"})
+        prelude.append(
+            {
+                "file": f"{identity_dir}/identity.md",
+                "as": "context",
+                "required": True,
+            }
+        )
 
         # Add any global prelude files from defaults
         for item in defaults.get("prelude", []):
@@ -135,13 +248,25 @@ class SheetComposer:
         self,
         identity_dir: str,
         defaults: dict[str, Any],
-    ) -> dict[int, list[dict[str, str]]]:
+    ) -> dict[int, list[dict[str, object]]]:
         """Build per-sheet cadenza injections."""
-        profile = {"file": f"{identity_dir}/profile.yaml", "as": "context"}
-        recent = {"file": f"{identity_dir}/recent.md", "as": "context"}
-        growth = {"file": f"{identity_dir}/growth.md", "as": "context"}
+        profile = {
+            "file": f"{identity_dir}/profile.yaml",
+            "as": "context",
+            "required": True,
+        }
+        recent = {
+            "file": f"{identity_dir}/recent.md",
+            "as": "context",
+            "required": True,
+        }
+        growth = {
+            "file": f"{identity_dir}/growth.md",
+            "as": "context",
+            "required": True,
+        }
 
-        cadenzas: dict[int, list[dict[str, str]]] = {
+        cadenzas: dict[int, list[dict[str, object]]] = {
             # Recon: profile + recent for orientation
             1: [profile, recent],
             # Plan: recent context
@@ -176,6 +301,7 @@ class SheetComposer:
                         cadenzas[sheet_num].append({
                             "directory": item["directory"],
                             "as": item.get("as", "context"),
+                            "required": item.get("required", True),
                         })
 
         return cadenzas
@@ -224,7 +350,7 @@ class SheetComposer:
         # The temperature-check CLI sheet always exits 0 and writes one of
         # these markers; skip_when consumes the work marker.
         temp_cmd = (
-            f"AGENT_DIR={identity_dir} AGENT_NAME={name} "
+            f"AGENT_DIR={shlex.quote(identity_dir)} AGENT_NAME={shlex.quote(name)} "
             f"MEMORY_BLOAT_THRESHOLD={memory_bloat} "
             f"STAGNATION_CYCLES={stagnation} "
             f"MIN_CYCLES_BETWEEN_PLAY={min_cycles} "

@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 import yaml
 
-from marianne_compiler.identity import L1_MAX_WORDS, L2_MAX_WORDS, L3_MAX_WORDS, IdentitySeeder
+import marianne_compiler.identity as identity_module
+from marianne_compiler.identity import (
+    L1_MAX_WORDS,
+    L2_MAX_WORDS,
+    L3_MAX_WORDS,
+    IdentitySeeder,
+)
 
 
 def _make_agent_def(
@@ -25,6 +34,13 @@ def _count_words(text: str) -> int:
     return len(text.split())
 
 
+def _state_hashes(agent_dir: Path) -> dict[str, str]:
+    return {
+        name: "sha256:" + hashlib.sha256((agent_dir / name).read_bytes()).hexdigest()
+        for name in ("identity.md", "profile.yaml", "recent.md", "growth.md")
+    }
+
+
 class TestIdentitySeeder:
     """Tests for IdentitySeeder."""
 
@@ -41,6 +57,70 @@ class TestIdentitySeeder:
         assert (result / "recent.md").exists()
         assert (result / "growth.md").exists()
         assert (result / "archive").is_dir()
+
+    def test_initial_receipt_uses_canonical_agent_identity(self, tmp_path: Path) -> None:
+        agent_dir = IdentitySeeder(agents_dir=tmp_path).seed(_make_agent_def())
+
+        receipt_path = next(
+            (agent_dir / ".marianne" / "reconciliation-receipts").glob(
+                "*-initialized.yaml"
+            )
+        )
+        receipt = yaml.safe_load(receipt_path.read_text())
+
+        assert receipt["agent_id"] == "canyon"
+
+    def test_concurrent_first_seed_is_serialized_without_mixed_identity(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        seed = _make_agent_def(seed_version="1.0.0", values=["structure"])
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(lambda _: IdentitySeeder(tmp_path).seed(seed), range(2))
+            )
+
+        assert results == [tmp_path / "canyon", tmp_path / "canyon"]
+        agent_dir = tmp_path / "canyon"
+        assert set(_state_hashes(agent_dir)) == {
+            "identity.md",
+            "profile.yaml",
+            "recent.md",
+            "growth.md",
+        }
+        baseline = yaml.safe_load(
+            (agent_dir / ".marianne" / "seed-baseline.yaml").read_text()
+        )
+        assert baseline["seed_hashes"]["identity_md"] == (
+            "sha256:"
+            + hashlib.sha256((agent_dir / "identity.md").read_bytes()).hexdigest()
+        )
+
+    def test_interrupted_first_seed_never_publishes_partial_person(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seeder = IdentitySeeder(tmp_path)
+        original = seeder._create_profile_yaml
+
+        def interrupt(*args: object, **kwargs: object) -> None:
+            raise OSError("injected first-seed interruption")
+
+        monkeypatch.setattr(seeder, "_create_profile_yaml", interrupt)
+        with pytest.raises(OSError, match="first-seed interruption"):
+            seeder.seed(_make_agent_def())
+
+        assert not (tmp_path / "canyon").exists()
+        monkeypatch.setattr(seeder, "_create_profile_yaml", original)
+        seeder.seed(_make_agent_def())
+        assert set(_state_hashes(tmp_path / "canyon")) == {
+            "identity.md",
+            "profile.yaml",
+            "recent.md",
+            "growth.md",
+        }
 
     def test_l1_contains_voice_and_focus(self, tmp_path: Path) -> None:
         """L1 identity.md contains the agent's voice and focus."""
@@ -231,3 +311,338 @@ class TestIdentitySeeder:
 
         profile = yaml.safe_load((tmp_path / "canyon" / "profile.yaml").read_text())
         assert "arch-review" in profile["a2a_skills"]
+
+    def test_reseed_preserves_lived_identity_and_profile_state(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A portable seed update cannot overwrite the person who developed."""
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        initial = _make_agent_def(
+            seed_version="1.0.0",
+            role="architect",
+            values=["boundaries matter"],
+        )
+        seeder.seed(initial)
+
+        agent_dir = tmp_path / "canyon"
+        lived_identity = (agent_dir / "identity.md").read_text().replace(
+            "- boundaries matter",
+            "- boundaries matter\n- protect the next person",
+        )
+        (agent_dir / "identity.md").write_text(lived_identity)
+        lived_profile = yaml.safe_load((agent_dir / "profile.yaml").read_text())
+        lived_profile["developmental_stage"] = "integration"
+        lived_profile["cycle_count"] = 14
+        lived_profile["relationships"]["forge"] = {
+            "strength": 0.91,
+            "valence": "trust",
+            "notes": "earned across cycles",
+        }
+        (agent_dir / "profile.yaml").write_text(
+            yaml.safe_dump(lived_profile, sort_keys=False)
+        )
+
+        updated = _make_agent_def(
+            seed_version="1.1.0",
+            role="systems-architect",
+            values=["boundaries matter", "make evidence inspectable"],
+        )
+        seeder.seed(updated)
+
+        assert (agent_dir / "identity.md").read_text() == lived_identity
+        reconciled_profile = yaml.safe_load((agent_dir / "profile.yaml").read_text())
+        assert reconciled_profile["developmental_stage"] == "integration"
+        assert reconciled_profile["cycle_count"] == 14
+        assert reconciled_profile["relationships"]["forge"]["strength"] == 0.91
+        assert reconciled_profile["role"] == "systems-architect"
+
+        pending = yaml.safe_load(
+            (agent_dir / ".marianne" / "pending-seed-conflicts.yaml").read_text()
+        )
+        assert pending["agent_id"] == "canyon"
+        assert pending["seed_version"] == "1.1.0"
+        assert any(item["path"] == "identity.md" for item in pending["conflicts"])
+
+    def test_reseed_applies_non_conflicting_seed_changes(self, tmp_path: Path) -> None:
+        """Unmodified seed-owned values advance deterministically."""
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        seeder.seed(
+            _make_agent_def(
+                seed_version="1.0.0",
+                role="architect",
+                values=["structure"],
+            )
+        )
+
+        seeder.seed(
+            _make_agent_def(
+                seed_version="1.1.0",
+                role="systems-architect",
+                values=["structure", "evidence"],
+            )
+        )
+
+        agent_dir = tmp_path / "canyon"
+        identity = (agent_dir / "identity.md").read_text()
+        profile = yaml.safe_load((agent_dir / "profile.yaml").read_text())
+        baseline = yaml.safe_load(
+            (agent_dir / ".marianne" / "seed-baseline.yaml").read_text()
+        )
+        assert "- evidence" in identity
+        assert profile["role"] == "systems-architect"
+        assert baseline["seed_version"] == "1.1.0"
+        assert not (agent_dir / ".marianne" / "pending-seed-conflicts.yaml").exists()
+
+    def test_adopting_existing_agent_is_conservative(self, tmp_path: Path) -> None:
+        """An existing person without baseline metadata is never inferred away."""
+        agent_dir = tmp_path / "canyon"
+        agent_dir.mkdir()
+        (agent_dir / "archive").mkdir()
+        (agent_dir / "identity.md").write_text("# Canyon\n\nA lived identity.\n")
+        (agent_dir / "profile.yaml").write_text(
+            "name: canyon\ndevelopmental_stage: generation\ncycle_count: 27\n"
+        )
+        (agent_dir / "recent.md").write_text("# Recent\n\nA real engagement.\n")
+        (agent_dir / "growth.md").write_text("# Growth\n\nA discovered practice.\n")
+
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        seeder.seed(_make_agent_def(seed_version="1.0.0", role="architect"))
+
+        assert (agent_dir / "identity.md").read_text() == "# Canyon\n\nA lived identity.\n"
+        assert "cycle_count: 27" in (agent_dir / "profile.yaml").read_text()
+        pending = yaml.safe_load(
+            (agent_dir / ".marianne" / "pending-seed-conflicts.yaml").read_text()
+        )
+        assert pending["reason"] == "adopted_without_prior_seed_baseline"
+        assert {item["path"] for item in pending["conflicts"]} == {
+            "identity.md",
+            "profile.yaml",
+        }
+
+    def test_reconcile_dry_run_writes_nothing(self, tmp_path: Path) -> None:
+        """Dry-run reconciliation is a read-only semantic preview."""
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        seeder.seed(_make_agent_def(seed_version="1.0.0", role="architect"))
+        agent_dir = tmp_path / "canyon"
+        before = {
+            path.relative_to(agent_dir): path.read_bytes()
+            for path in agent_dir.rglob("*")
+            if path.is_file()
+        }
+
+        result = seeder.reconcile(
+            _make_agent_def(seed_version="2.0.0", role="systems-architect"),
+            dry_run=True,
+        )
+        after = {
+            path.relative_to(agent_dir): path.read_bytes()
+            for path in agent_dir.rglob("*")
+            if path.is_file()
+        }
+
+        assert result.status == "would_update"
+        assert before == after
+
+    def test_agent_can_acknowledge_seed_conflicts_with_resolution_receipt(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Only an explicit agent-authored adjudication closes seed conflict debt."""
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        seeder.seed(_make_agent_def(seed_version="1.0.0", values=["structure"]))
+        identity = tmp_path / "canyon" / "identity.md"
+        identity.write_text(identity.read_text().replace(
+            "- structure", "- structure\n- learned autonomy"
+        ))
+        seeder.seed(_make_agent_def(seed_version="2.0.0", values=["evidence"]))
+        pending_path = (
+            tmp_path / "canyon" / ".marianne" / "pending-seed-conflicts.yaml"
+        )
+        pending = yaml.safe_load(pending_path.read_text())
+        agent_dir = tmp_path / "canyon"
+        decision = "I preserve learned autonomy and incorporate evidence in my own words."
+        resolved_paths = [item["path"] for item in pending["conflicts"]]
+        authored = (
+            agent_dir
+            / ".marianne"
+            / "agent-authored-resolutions"
+            / "seed-2.0.0.yaml"
+        )
+        authored.parent.mkdir()
+        authored.write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "kind": "marianne-agent-seed-conflict-resolution",
+                    "agent_id": "canyon",
+                    "seed_version": "2.0.0",
+                    "pending_conflicts_sha256": (
+                        "sha256:" + hashlib.sha256(pending_path.read_bytes()).hexdigest()
+                    ),
+                    "agent_authority_confirmed": True,
+                    "resolved_paths": sorted(resolved_paths),
+                    "decision": decision,
+                    "evidence": "cycle-state/canyon-resurrection.md",
+                    "lived_state_hashes": _state_hashes(agent_dir),
+                },
+                sort_keys=False,
+            )
+        )
+
+        receipt = seeder.acknowledge_resolution(
+            "canyon",
+            {
+                "agent_id": "canyon",
+                "seed_version": "2.0.0",
+                "agent_authority_confirmed": True,
+                "resolved_paths": resolved_paths,
+                "decision": decision,
+                "evidence": "cycle-state/canyon-resurrection.md",
+                "agent_authored_evidence": (
+                    ".marianne/agent-authored-resolutions/seed-2.0.0.yaml"
+                ),
+                "agent_authored_evidence_sha256": (
+                    "sha256:" + hashlib.sha256(authored.read_bytes()).hexdigest()
+                ),
+                "lived_state_hashes": _state_hashes(agent_dir),
+            },
+        )
+
+        assert receipt.is_file()
+        assert not pending_path.exists()
+        document = yaml.safe_load(receipt.read_text())
+        assert document["authority"] == "agent"
+        assert document["decision"].startswith("I preserve")
+        assert document["lived_state_hashes"]["identity.md"].startswith("sha256:")
+
+    def test_seed_conflict_resolution_refuses_counterfeit_authority_evidence(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        seeder.seed(_make_agent_def(seed_version="1.0.0"))
+        agent_dir = tmp_path / "canyon"
+        identity = agent_dir / "identity.md"
+        identity.write_text(identity.read_text() + "\nA lived choice.\n")
+        seeder.seed(_make_agent_def(seed_version="2.0.0", voice="New seed voice."))
+        pending_path = agent_dir / ".marianne" / "pending-seed-conflicts.yaml"
+        pending = yaml.safe_load(pending_path.read_text())
+
+        with pytest.raises(ValueError, match="existing file"):
+            seeder.acknowledge_resolution(
+                "canyon",
+                {
+                    "agent_id": "canyon",
+                    "seed_version": "2.0.0",
+                    "agent_authority_confirmed": True,
+                    "resolved_paths": [
+                        item["path"] for item in pending["conflicts"]
+                    ],
+                    "decision": "A caller asserted this.",
+                    "evidence": "does/not/exist",
+                    "agent_authored_evidence": (
+                        ".marianne/agent-authored-resolutions/missing.yaml"
+                    ),
+                    "agent_authored_evidence_sha256": "sha256:" + "0" * 64,
+                    "lived_state_hashes": _state_hashes(agent_dir),
+                },
+            )
+
+        with pytest.raises(ValueError, match="agent-authored-resolutions"):
+            seeder.acknowledge_resolution(
+                "canyon",
+                {
+                    "agent_id": "canyon",
+                    "seed_version": "2.0.0",
+                    "agent_authority_confirmed": True,
+                    "resolved_paths": [
+                        item["path"] for item in pending["conflicts"]
+                    ],
+                    "decision": "A caller asserted this.",
+                    "evidence": "identity.md",
+                    "agent_authored_evidence": "identity.md",
+                    "agent_authored_evidence_sha256": (
+                        "sha256:" + hashlib.sha256(identity.read_bytes()).hexdigest()
+                    ),
+                    "lived_state_hashes": _state_hashes(agent_dir),
+                },
+            )
+
+        assert pending_path.is_file()
+
+    def test_reconcile_retry_retains_conflict_if_pending_write_interrupts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        seeder.seed(_make_agent_def(seed_version="1.0.0", values=["structure"]))
+        identity = tmp_path / "canyon" / "identity.md"
+        identity.write_text(identity.read_text().replace(
+            "- structure", "- structure\n- learned autonomy"
+        ))
+        original_write = identity_module._atomic_write_yaml
+
+        def interrupt_pending(path: Path, value: object) -> None:
+            if path.name == "pending-seed-conflicts.yaml":
+                raise OSError("injected interruption")
+            original_write(path, value)
+
+        monkeypatch.setattr(identity_module, "_atomic_write_yaml", interrupt_pending)
+        with pytest.raises(OSError, match="injected interruption"):
+            seeder.seed(_make_agent_def(seed_version="2.0.0", values=["evidence"]))
+        monkeypatch.setattr(identity_module, "_atomic_write_yaml", original_write)
+
+        retry = seeder.reconcile(
+            _make_agent_def(seed_version="2.0.0", values=["evidence"])
+        )
+
+        assert retry.status == "updated_with_conflicts"
+        assert any(item["path"] == "identity.md" for item in retry.conflicts)
+        assert (
+            tmp_path / "canyon" / ".marianne" / "pending-seed-conflicts.yaml"
+        ).is_file()
+
+    def test_reconcile_refuses_corrupt_baseline_before_touching_lived_identity(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        seeder.seed(_make_agent_def(seed_version="1.0.0", values=["structure"]))
+        agent_dir = tmp_path / "canyon"
+        identity_path = agent_dir / "identity.md"
+        identity_path.write_text(identity_path.read_text() + "\nA lived choice.\n")
+        lived = identity_path.read_text()
+        baseline_path = agent_dir / ".marianne" / "seed-baseline.yaml"
+        baseline = yaml.safe_load(baseline_path.read_text())
+        baseline["seed"]["identity_md"] = lived
+        baseline_path.write_text(yaml.safe_dump(baseline, sort_keys=False))
+
+        with pytest.raises(ValueError, match="integrity check failed"):
+            seeder.reconcile(
+                _make_agent_def(seed_version="2.0.0", values=["evidence"])
+            )
+
+        assert identity_path.read_text() == lived
+
+    def test_seed_conflict_resolution_requires_exact_agent_authority(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        seeder = IdentitySeeder(agents_dir=tmp_path)
+        seeder.seed(_make_agent_def(seed_version="1.0.0"))
+        identity = tmp_path / "canyon" / "identity.md"
+        identity.write_text(identity.read_text() + "\nA lived choice.\n")
+        seeder.seed(_make_agent_def(seed_version="2.0.0", voice="New seed voice."))
+
+        with pytest.raises(ValueError, match="agent_authority_confirmed"):
+            seeder.acknowledge_resolution(
+                "canyon",
+                {
+                    "agent_id": "canyon",
+                    "seed_version": "2.0.0",
+                    "resolved_paths": ["identity.md"],
+                    "decision": "The conductor chose.",
+                },
+            )

@@ -13,6 +13,7 @@ Usage::
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -53,6 +54,20 @@ def compose(
         "--agents-dir",
         help="Directory for agent identity stores. "
         "Defaults to ~/.marianne/agents/.",
+    ),
+    capability_inventory: Path | None = typer.Option(
+        None,
+        "--capability-inventory",
+        help=(
+            "YAML inventory of live-verified instrument profiles used to bind "
+            "defaults.phase_requirements deterministically."
+        ),
+    ),
+    capability_evidence_at: str | None = typer.Option(
+        None,
+        "--capability-evidence-at",
+        hidden=True,
+        help="Override routing evidence time for reproducible tests.",
     ),
     fleet: bool = typer.Option(
         False,
@@ -133,6 +148,29 @@ def compose(
         defaults = config_data.setdefault("defaults", {})
         if isinstance(defaults, dict):
             defaults["job_name_prefix"] = job_prefix
+
+    if capability_inventory is not None:
+        try:
+            from marianne_compiler.capabilities import bind_config_to_capabilities
+
+            inventory = yaml.safe_load(capability_inventory.read_text()) or {}
+            if not isinstance(inventory, dict):
+                raise ValueError("capability inventory must contain a mapping")
+            evidence_at = (
+                datetime.fromisoformat(capability_evidence_at.replace("Z", "+00:00"))
+                if capability_evidence_at
+                else datetime.now(UTC)
+            )
+            if evidence_at.tzinfo is None:
+                evidence_at = evidence_at.replace(tzinfo=UTC)
+            config_data = bind_config_to_capabilities(
+                config_data,
+                inventory,
+                now=evidence_at,
+            )
+        except (OSError, ValueError, yaml.YAMLError) as e:
+            typer.echo(f"Error: Cannot bind capability inventory: {e}", err=True)
+            raise typer.Exit(code=1) from None
 
     agents = config_data.get("agents", [])
     if not agents:

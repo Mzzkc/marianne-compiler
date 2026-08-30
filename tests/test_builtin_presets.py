@@ -14,7 +14,9 @@ def test_generic_fleet_preset_loads() -> None:
     config = load_builtin_preset("generic-fleet")
 
     assert config["project"]["name"] == "generic-agent-fleet"
-    assert len(config["agents"]) == 32
+    assert len(config["agents"]) == 33
+    assert config["agents"][-1]["name"] == "keystone"
+    assert "runtime" not in {agent["name"] for agent in config["agents"]}
     assert "flowspec" not in str(config).lower()
     assert "llama-4-maverick" not in str(config).lower()
     assert "kimi" not in str(config).lower()
@@ -28,24 +30,13 @@ def test_generic_fleet_preset_loads() -> None:
         for fallback in tier_config.get("fallbacks", [])
         if fallback.get("instrument") == "codex-cli"
     }
-    assert codex_fallback_tiers == {"work", "integration", "play", "inspect"}
-    assert all(
-        tier_config["primary"].get("instrument") != "codex-cli"
-        for tier_config in default_instruments.values()
-    )
-    gemini_flash_medium_primary_tiers = {
-        tier
-        for tier, tier_config in default_instruments.items()
-        if tier_config["primary"].get("instrument") == "antigravity"
-        and tier_config["primary"].get("model") == "gemini-3.7-flash-medium"
+    assert codex_fallback_tiers == {
+        "recon", "plan", "work", "integration", "play",
+        "aar", "consolidate", "reflect", "resurrect",
     }
-    assert gemini_flash_medium_primary_tiers == {
-        "recon",
-        "plan",
-        "inspect",
-        "aar",
-        "consolidate",
-    }
+    assert default_instruments["inspect"]["primary"] == {"instrument": "codex-cli"}
+    assert "model" not in yaml.safe_dump(default_instruments, sort_keys=True)
+    assert config["defaults"]["phase_requirements"]["work"]["load_bearing"] is True
 
 
 def test_generic_fleet_preset_compiles(tmp_path: Path) -> None:
@@ -60,7 +51,7 @@ def test_generic_fleet_preset_compiles(tmp_path: Path) -> None:
     score_paths = pipeline.compile_config(config, tmp_path / "scores", base_dir=Path.cwd())
 
     agent_scores = [path for path in score_paths if path.name != "fleet.yaml"]
-    assert len(agent_scores) == 32
+    assert len(agent_scores) == 33
     assert (tmp_path / "scores" / "fleet.yaml").exists()
     assert not list((tmp_path / "scores").glob("*.agent-card.yaml"))
 
@@ -68,7 +59,7 @@ def test_generic_fleet_preset_compiles(tmp_path: Path) -> None:
     assert "skip_when" in canyon["sheet"]
     assert "skip_when_command" not in canyon["sheet"]
     assert canyon["sheet"]["per_sheet_instruments"][4] == "cli"
-    assert canyon["sheet"]["per_sheet_instruments"][5] == "claude-code--glm-5-turbo"
+    assert canyon["sheet"]["per_sheet_instruments"][5] == "claude-code"
     assert canyon["sheet"]["per_sheet_instruments"][11] == "cli"
     assert canyon["techniques"]["a2a"]["kind"] == "protocol"
     assert "3" in canyon["techniques"]["a2a"]["phases"]
@@ -78,11 +69,8 @@ def test_generic_fleet_preset_compiles(tmp_path: Path) -> None:
     assert "11" not in canyon["techniques"]["filesystem"]["phases"]
     assert "symbols-python" not in canyon["techniques"]
     assert canyon["agent_card"]["name"] == "canyon"
-    assert "claude-code--glm-5.3-1m" in canyon["instruments"]
-    assert "antigravity--gemini-3.7-flash-medium" in canyon["instruments"]
-    assert "antigravity--gemini-3.7-flash-low" in canyon["instruments"]
+    assert "instruments" not in canyon
     assert "gemini-3.5-flash-" not in yaml.safe_dump(canyon, sort_keys=True)
-    assert "gemini-cli--gemini-3.5-flash" not in canyon["instruments"]
     identity_dir = canyon["prompt"]["variables"]["agent_identity_dir"]
     assert str(tmp_path / "agents" / "canyon") in identity_dir
     for filename in ("identity.md", "profile.yaml", "recent.md", "growth.md"):
@@ -91,15 +79,15 @@ def test_generic_fleet_preset_compiles(tmp_path: Path) -> None:
 
     active_dir = tmp_path / "workspace" / "shared" / "active"
     assert active_dir.is_dir()
-    assert (active_dir / "00-cadenza-coordination.md").exists()
-    assert (active_dir / "01-task-board.md").exists()
-    assert (active_dir / "02-agent-status.md").exists()
-    assert (active_dir / "03-findings.md").exists()
-    assert (active_dir / "04-decision-log.md").exists()
-    assert (active_dir / "05-directives.md").exists()
-    assert (active_dir / "06-handoff-index.md").exists()
-    assert "Concurrent Write Safety" in (
-        active_dir / "00-cadenza-coordination.md"
+    assert {path.name for path in active_dir.iterdir()} == {
+        "01-task-board.md",
+        "02-status.md",
+        "03-urgent-directives.md",
+        "04-handoffs.md",
+    }
+    assert "Preserve the existing form" in (active_dir / "02-status.md").read_text()
+    assert "controls ordinary agent plans" in (
+        active_dir / "03-urgent-directives.md"
     ).read_text()
     assert "owner-scoped row once" in (
         active_dir / "01-task-board.md"

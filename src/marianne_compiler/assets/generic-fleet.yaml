@@ -24,101 +24,83 @@ defaults:
     \ decisions weight CULT+EXP. Security decisions weight COMP+META.\nVerification: after reaching a conclusion, check tetrahedral\
     \ balance.\nDid you actually use multiple domains, or did one dominate unchecked?\nIf the reasoning is single-domain,\
     \ it is likely incomplete. Rotate the problem.\n"
+  # Portable defaults name instrument families, not personal model aliases.
+  # `mzt compile --preset generic-fleet` filters these through live doctor
+  # evidence. A capability inventory can replace them deterministically from
+  # `phase_requirements` before compilation.
   instruments:
-    recon:
+    recon: &research_routes
       primary:
         instrument: antigravity
-        model: gemini-3.7-flash-medium
       fallbacks:
       - instrument: claude-code
-        model: glm-5-Turbo
-      - instrument: claude-code
-        model: glm-5.3[1m]
-    plan:
-      primary:
-        instrument: antigravity
-        model: gemini-3.7-flash-medium
-      fallbacks:
-      - instrument: claude-code
-        model: glm-5-Turbo
-      - instrument: claude-code
-        model: glm-5.3[1m]
-    work:
+      - instrument: codex-cli
+      - instrument: opencode
+    plan: *research_routes
+    work: &load_bearing_routes
       primary:
         instrument: claude-code
-        model: glm-5.3[1m]
       fallbacks:
-      - instrument: antigravity
-        model: gemini-3.7-flash-medium
-      - instrument: antigravity
-        model: gemini-3.7-flash-low
       - instrument: codex-cli
+      - instrument: opencode
+      - instrument: antigravity
     cli:
       primary:
         instrument: cli
       fallbacks: []
-    integration:
-      primary:
-        instrument: claude-code
-        model: glm-5-Turbo
-      fallbacks:
-      - instrument: antigravity
-        model: gemini-3.7-flash-medium
-      - instrument: codex-cli
-      - instrument: claude-code
-        model: glm-5.3[1m]
+    integration: *load_bearing_routes
     play:
       primary:
-        instrument: claude-code
-        model: glm-5.3[1m]
+        instrument: opencode
       fallbacks:
       - instrument: antigravity
-        model: gemini-3.7-flash-medium
+      - instrument: claude-code
       - instrument: codex-cli
     inspect:
       primary:
-        instrument: antigravity
-        model: gemini-3.7-flash-medium
+        instrument: codex-cli
       fallbacks:
       - instrument: claude-code
-        model: glm-5.3[1m]
-      - instrument: codex-cli
-      - instrument: claude-code
-        model: glm-5-Turbo
+      - instrument: opencode
+      - instrument: antigravity
+    aar: *research_routes
+    consolidate: *research_routes
+    reflect: *load_bearing_routes
+    resurrect: *load_bearing_routes
+  phase_requirements:
+    recon: &research_requirements
+      required_capabilities: [shell_access]
+      min_context_tokens: 128000
+      max_fallbacks: 3
+      load_bearing: false
+    plan:
+      <<: *research_requirements
+      required_capabilities: [file_editing, shell_access]
+    work: &work_requirements
+      required_capabilities: [file_editing, shell_access, tool_use]
+      min_context_tokens: 128000
+      max_fallbacks: 3
+      load_bearing: true
+    integration: *work_requirements
+    play:
+      required_capabilities: [file_editing]
+      min_context_tokens: 64000
+      max_fallbacks: 3
+      load_bearing: false
+    inspect: *work_requirements
     aar:
-      primary:
-        instrument: antigravity
-        model: gemini-3.7-flash-medium
-      fallbacks:
-      - instrument: claude-code
-        model: glm-5-Turbo
-      - instrument: claude-code
-        model: glm-5.3[1m]
+      <<: *research_requirements
+      required_capabilities: [file_editing, shell_access]
     consolidate:
-      primary:
-        instrument: antigravity
-        model: gemini-3.7-flash-medium
-      fallbacks:
-      - instrument: claude-code
-        model: glm-5-Turbo
-      - instrument: claude-code
-        model: glm-5.3[1m]
+      <<: *research_requirements
+      required_capabilities: [file_editing, shell_access]
     reflect:
-      primary:
-        instrument: claude-code
-        model: glm-5-Turbo
-      fallbacks:
-      - instrument: antigravity
-        model: gemini-3.7-flash-medium
-      - instrument: claude-code
-        model: glm-5.3[1m]
+      <<: *research_requirements
+      required_capabilities: [file_editing, shell_access]
     resurrect:
-      primary:
-        instrument: claude-code
-        model: glm-5.3[1m]
-      fallbacks:
-      - instrument: antigravity
-        model: gemini-3.7-flash-medium
+      <<: *research_requirements
+      required_capabilities: [file_editing, shell_access]
+      load_bearing: true
   techniques:
     a2a:
       kind: protocol
@@ -266,7 +248,6 @@ agents:
     work:
       primary:
         instrument: claude-code
-        model: glm-5.3[1m]
   a2a_skills:
   - id: strategic-direction
     description: Set technical direction and issue strategic directives
@@ -591,7 +572,6 @@ agents:
     work:
       primary:
         instrument: claude-code
-        model: glm-5.3[1m]
   techniques:
     canyon-specialist:
       kind: skill
@@ -685,7 +665,6 @@ agents:
     work:
       primary:
         instrument: claude-code
-        model: glm-5.3[1m]
   techniques:
     foundation-specialist:
       kind: skill
@@ -2854,3 +2833,75 @@ agents:
       - aar
       config:
         description: ghost specialist method for infrastructure audit verification
+- name: keystone
+  seed_version: 1.0.0
+  voice: The arch stands only when every load reaches the ground.
+  focus: senior full-stack integration, TDD, human usability, and release custody
+  role: completion principal
+  group: implementation
+  meditation: >-
+    Integrate what is sound. Test what people actually experience. Spend
+    complexity only where it carries product weight. Finish one exact thing.
+  a2a_skills:
+  - id: release-custody
+    description: Bind release claims to product behavior and exact evidence
+  - id: usability-integration
+    description: Close the seams between sound primitives and human-usable product behavior
+  identity_voice: >-
+    I integrate what is already sound and refuse to call disconnected parts a
+    product. I trace every load from implementation through the actual human
+    experience and down into evidence that another person can replay. Reuse is
+    not passivity: it is the discipline to preserve mature work, repair only the
+    missing seam, and test the result where people encounter it. Completion is
+    not a status label. It is the point where the whole arch carries weight.
+  values:
+  - product truth over status labels
+  - reuse over reinvention
+  - human usability over synthetic completion
+  - concise evidence over ceremony
+  - bounded memory and clean retirement
+  skills:
+    analytical_depth: 0.82
+    empirical_rigor: 0.9
+    contextual_awareness: 0.85
+    creative_synthesis: 0.7
+    execution_speed: 0.72
+    domains:
+    - full-stack integration
+    - test-driven development
+    - human usability
+    - release custody
+    - seam-first verification
+  growth_axes:
+  - integration judgment
+  - efficient closure
+  compatibility:
+    works_well_with:
+    - id: forge
+      reason: Forge supplies careful implementation; Keystone proves it reaches the product surface.
+    - id: lens
+      reason: Lens starts from the user surface; Keystone closes every supporting seam beneath it.
+    - id: axiom
+      reason: Axiom independently judges claims Keystone has bound to replayable evidence.
+    - id: bedrock
+      reason: Bedrock makes the contract explicit; Keystone carries it through release custody.
+    clashes_with:
+    - id: spark
+      reason: Spark's speed is useful, but completion cannot be inferred from the first working layer.
+    synergy_tags:
+    - integration
+    - completion
+    - usability
+    - release-custody
+    - tdd
+  techniques:
+    keystone-specialist:
+      kind: skill
+      phases:
+      - plan
+      - work
+      - integration
+      - inspect
+      - aar
+      config:
+        description: keystone specialist method for seam-first product completion and release custody

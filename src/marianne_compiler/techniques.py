@@ -232,6 +232,7 @@ class TechniqueWirer:
             item["phases"] = expanded
 
             if item.get("kind", "skill") == "skill":
+                item["required"] = bool(item.get("required", True))
                 doc = self._find_technique_doc(name)
                 if doc:
                     cfg = dict(item.get("config", {}))

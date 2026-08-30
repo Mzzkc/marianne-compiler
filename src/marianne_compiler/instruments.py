@@ -258,8 +258,10 @@ class InstrumentResolver:
                     resolved.get("fallbacks", []),
                     exclude=primary_alias,
                 )
-                if fallbacks:
-                    per_sheet_fallbacks[sheet_num] = fallbacks
+                # Emit even an empty list: omission inherits score-level
+                # fallbacks at runtime, which could hand a raw CLI script to
+                # an LLM instrument. The resolved tier is authoritative.
+                per_sheet_fallbacks[sheet_num] = fallbacks
 
         # Score-level primary: the work tier's alias (post-#347: a name,
         # never a backend dict).
