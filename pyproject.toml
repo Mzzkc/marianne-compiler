@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "marianne-compiler"
 version = "0.1.0"
-description = "Composition compiler for Marianne AI Compose — semantic agent definitions to Mozart score YAML"
+description = "Composition compiler for Marianne AI Compose — semantic agent definitions to Marianne score YAML"
 requires-python = ">=3.11"
 dependencies = [
     "pyyaml>=6.0",
