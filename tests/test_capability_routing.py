@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +15,7 @@ from marianne_compiler.capabilities import (
     bind_score_to_capabilities,
     resolve_phase_routes,
 )
+from marianne_compiler.validations import ValidationGenerator
 
 NOW = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
 
@@ -391,6 +394,128 @@ def test_concrete_score_binding_replaces_routes_and_embeds_receipts(
     assert contract["run_workspace"] == str(run_workspace)
     assert bound["workspace"] == str(run_workspace)
     assert score["instrument"] == "stale-unverified"
+
+
+def test_concrete_score_binding_localizes_home_paths_without_retargeting_cadenza(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    canonical_agent = home / "Projects" / "AGENTS" / "agents" / "journey"
+    cadenza = canonical_agent / "cadenzas" / "personal" / "active"
+    cadenza.mkdir(parents=True)
+    expected_files = {
+        "01-task-board.md",
+        "02-status.md",
+        "03-urgent-directives.md",
+        "04-handoffs.md",
+    }
+    for filename in expected_files:
+        (cadenza / filename).write_text(filename)
+    score = {
+        "workspace": str(tmp_path / "unused"),
+        "sheet": {
+            "prelude": [{"file": str(canonical_agent / "identity.md")}],
+            "cadenzas": {"all": [{"directory": str(cadenza)}]},
+        },
+        "validations": [],
+        "prompt": {
+            "variables": {
+                "agent_identity_dir": str(canonical_agent),
+                "marianne_agent": {
+                    "schema_version": 1,
+                    "agent_id": "journey",
+                    "score_shape": "targeted-work",
+                    "phase_requirements": {"work": {"required_capabilities": ["file_editing"]}},
+                    "routing_receipts": {},
+                },
+            }
+        },
+    }
+    inventory = {
+        "profiles": [
+            _profile(
+                "verified",
+                provider="openai",
+                model="gpt-5.6-codex",
+                capabilities=["file_editing"],
+            )
+        ]
+    }
+
+    generated = ValidationGenerator().generate(
+        {"name": "journey"},
+        {
+            "cadenza_completion_validation": True,
+            "cadenzas": {"active": [{"phases": ["recon"]}]},
+        },
+        agents_dir=str(home / "Projects" / "AGENTS" / "agents"),
+    )
+    stock_check = next(
+        item
+        for item in generated
+        if item.get("description") == "Cadenza completion state for journey recon"
+    )
+    legacy_command = stock_check["command"].replace(
+        f"AGENT_DIR={canonical_agent} ", "", 1
+    )
+    legacy_command = legacy_command.replace(
+        'agent_dir = Path(os.environ["AGENT_DIR"]).expanduser()\n', "", 1
+    )
+    legacy_command = legacy_command.replace(
+        'cadenza = agent_dir / "cadenzas" / "personal" / "active"\n', "", 1
+    )
+    legacy_command = legacy_command.replace(
+        "cadenza / ", 'workspace / "shared" / "active" / ',
+    )
+    score["validations"] = [
+        {**stock_check, "command": legacy_command}
+    ]
+
+    bound = bind_score_to_capabilities(
+        score,
+        inventory,
+        run_workspace=home / "Projects" / "WORKSPACES" / "test-bound",
+        now=NOW,
+    )
+
+    expected_cadenza = str(cadenza).replace(str(home), "~", 1)
+    assert bound["workspace"].startswith("~/")
+    assert bound["sheet"]["prelude"][0]["file"] == str(
+        canonical_agent / "identity.md"
+    ).replace(str(Path.home()), "~", 1)
+    assert bound["sheet"]["cadenzas"]["all"][0]["directory"] == expected_cadenza
+    assert Path(expected_cadenza).expanduser() == cadenza
+    assert {path.name for path in Path(expected_cadenza).expanduser().iterdir()} == expected_files
+    assert bound["prompt"]["variables"]["agent_identity_dir"] == str(
+        canonical_agent
+    ).replace(str(home), "~", 1)
+    bound_command = bound["validations"][0]["command"]
+    assert "AGENT_DIR='~/Projects/AGENTS/agents/journey'" in bound_command
+    assert 'agent_dir / "cadenzas" / "personal" / "active"' in bound_command
+    assert 'workspace / "shared" / "active"' not in bound_command
+
+    workspace = Path(bound["workspace"]).expanduser()
+    artifact = workspace / "cycle-state" / "journey-recon.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("Observed the bounded test input.\n")
+    (cadenza / "01-task-board.md").write_text(
+        "| journey-T-001 | journey | done | cycle-state/journey-recon.md |\n"
+    )
+    (cadenza / "02-status.md").write_text(
+        "journey recon cycle-state/journey-recon.md\n"
+    )
+    command = bound_command.replace("{workspace}", str(workspace))
+    result = subprocess.run(
+        ["bash", "-c", command],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env={**os.environ, "HOME": str(home)},
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_score_binding_rejects_workspace_with_prior_lifecycle_evidence(

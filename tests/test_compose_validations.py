@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 from marianne_compiler.validations import ValidationGenerator
 
 
@@ -86,6 +89,7 @@ class TestValidationGenerator:
                     ]
                 },
             },
+            agents_dir="/canonical/agents",
         )
         checks = [
             v
@@ -108,10 +112,80 @@ class TestValidationGenerator:
         assert "does not bind" in checks[1]["command"]
         assert "global numeric cadenza id" in checks[1]["command"]
         assert "repeats concrete cadenza id" in checks[1]["command"]
+        assert 'agent_dir / "cadenzas" / "personal" / "active"' in checks[1]["command"]
+        assert 'workspace / "shared" / "active"' not in checks[1]["command"]
+        assert "AGENT_DIR=/canonical/agents/canyon" in checks[1]["command"]
         assert "cycle-state/canyon-plan.md" in checks[1]["command"]
         assert checks[3]["description"] == "Cadenza completion state for canyon inspect"
         assert "ARTIFACT_REL='cycle-state/canyon-inspection.md'" in checks[3]["command"]
         assert "cycle-state/canyon-inspect.md" not in checks[3]["command"]
+
+        default_root_checks = [
+            item
+            for item in gen.generate(
+                _make_agent_def(),
+                {
+                    "cadenza_completion_validation": True,
+                    "cadenzas": {"active": [{"phases": ["plan"]}]},
+                },
+            )
+            if item.get("description") == "Cadenza completion state for canyon plan"
+        ]
+        assert "AGENT_DIR='~/.marianne/agents/canyon'" in default_root_checks[0]["command"]
+
+    def test_cadenza_completion_command_reads_personal_source_and_passes(
+        self, tmp_path: Path
+    ) -> None:
+        """Generated checks consume the same canonical files the score injects."""
+        agents_dir = tmp_path / "agents"
+        cadenza = agents_dir / "journey" / "cadenzas" / "personal" / "active"
+        cadenza.mkdir(parents=True)
+        (cadenza / "01-task-board.md").write_text(
+            "| journey-T-001 | journey | done | cycle-state/journey-recon.md |\n"
+        )
+        (cadenza / "02-status.md").write_text(
+            "journey recon cycle-state/journey-recon.md\n"
+        )
+        (cadenza / "03-urgent-directives.md").write_text("No extra directives.\n")
+        (cadenza / "04-handoffs.md").write_text("No handoffs.\n")
+        workspace = tmp_path / "run"
+        artifact = workspace / "cycle-state" / "journey-recon.md"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_text("Observed the bounded test input.\n")
+        validations = ValidationGenerator().generate(
+            _make_agent_def("journey"),
+            {
+                "cadenza_completion_validation": True,
+                "cadenzas": {
+                    "active": [
+                        {
+                            "directory": "{{workspace}}/shared/active",
+                            "as": "context",
+                            "phases": ["recon"],
+                        }
+                    ]
+                },
+            },
+            agents_dir=str(agents_dir),
+        )
+        check = next(
+            item
+            for item in validations
+            if item.get("description") == "Cadenza completion state for journey recon"
+        )
+        command = check["command"].replace("{workspace}", str(workspace))
+
+        result = subprocess.run(
+            ["bash", "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert f"AGENT_DIR={agents_dir}/journey" in command
+        assert 'agent_dir / "cadenzas" / "personal" / "active"' in command
+        assert 'workspace / "shared" / "active"' not in command
 
     def test_generates_plan_validation(self) -> None:
         """Generates a file_exists check for the plan document."""

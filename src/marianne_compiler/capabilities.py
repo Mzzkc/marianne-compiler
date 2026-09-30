@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
+import shlex
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -237,7 +238,96 @@ def bind_score_to_capabilities(
     contract["bound_at"] = _format_time((now or datetime.now(UTC)).astimezone(UTC))
     contract["run_workspace"] = str(workspace)
     bound["workspace"] = str(workspace)
-    return bound
+    _bind_personal_cadenza_validations(bound)
+    return _localize_home_paths(bound)
+
+
+def _bind_personal_cadenza_validations(score: dict[str, Any]) -> None:
+    """Point stock cadenza checks at the identity's injected active source.
+
+    Older installed score templates validate ``workspace/shared/active`` even
+    though their required cadenza attachment is the canonical personal active
+    directory. Adapt only the recognized stock check shape in the run artifact;
+    the installed managed score remains untouched.
+    """
+    prompt = score.get("prompt")
+    variables = prompt.get("variables") if isinstance(prompt, dict) else None
+    identity_dir = variables.get("agent_identity_dir") if isinstance(variables, dict) else None
+    validations = score.get("validations")
+    if not isinstance(identity_dir, str) or not isinstance(validations, list):
+        return
+    identity_dir = str(_localize_home_paths(identity_dir))
+
+    prefix = 'WORKSPACE="{workspace}" '
+    old_prefix = 'workspace = Path(os.environ["WORKSPACE"])'
+    old_paths = {
+        f'{name} = workspace / "shared" / "active" / "{filename}"':
+        f'{name} = cadenza / "{filename}"'
+        for name, filename in (
+            ("task_board", "01-task-board.md"),
+            ("status_board", "02-status.md"),
+            ("directives", "03-urgent-directives.md"),
+            ("handoffs", "04-handoffs.md"),
+        )
+    }
+    for validation in validations:
+        if not isinstance(validation, dict):
+            continue
+        description = validation.get("description", "")
+        command = validation.get("command")
+        if (
+            not isinstance(description, str)
+            or not description.startswith("Cadenza completion state")
+            or not isinstance(command, str)
+            or 'agent_dir / "cadenzas" / "personal" / "active"' in command
+        ):
+            continue
+        if 'task_board = workspace / "shared" / "active" / "01-task-board.md"' not in command:
+            continue
+        if not command.startswith(prefix) or old_prefix not in command:
+            raise CapabilityResolutionError(
+                "Unsupported stock cadenza validation command; cannot bind it "
+                "to the attached personal active cadenza"
+            )
+        command = command.replace(
+            prefix,
+            prefix + f"AGENT_DIR={shlex.quote(identity_dir)} ",
+            1,
+        )
+        command = command.replace(
+            old_prefix,
+            old_prefix + '\nagent_dir = Path(os.environ["AGENT_DIR"]).expanduser()',
+            1,
+        )
+        command = command.replace(
+            'task_board = workspace / "shared" / "active" / "01-task-board.md"',
+            'cadenza = agent_dir / "cadenzas" / "personal" / "active"\n'
+            'task_board = cadenza / "01-task-board.md"',
+            1,
+        )
+        for old_path, new_path in list(old_paths.items())[1:]:
+            command = command.replace(old_path, new_path, 1)
+        validation["command"] = command
+
+
+def _localize_home_paths(value: Any) -> Any:
+    """Replace machine-absolute home paths with runtime-expandable ``~`` paths.
+
+    The runtime expands tilde paths for score workspaces and attachments. This
+    keeps bound run artifacts portable while retaining the same underlying
+    identity and personal-cadenza sources.
+    """
+    home = Path.home()
+    if isinstance(value, dict):
+        return {key: _localize_home_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_localize_home_paths(item) for item in value]
+    if isinstance(value, str):
+        path = Path(value)
+        if path.is_absolute() and path.is_relative_to(home):
+            relative = path.relative_to(home)
+            return "~" if not relative.parts else f"~/{relative.as_posix()}"
+    return value
 
 
 def _rejection_reasons(

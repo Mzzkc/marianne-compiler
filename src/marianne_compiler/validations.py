@@ -74,7 +74,7 @@ class ValidationGenerator:
         ))
         if "recon" in cadenza_completion_phases:
             validations.append(
-                self._cadenza_completion_validation(name, "recon", 1, recon_path)
+                self._cadenza_completion_validation(name, "recon", 1, recon_path, agents_dir)
             )
         if defaults.get("fleet_score_count_truth_check"):
             validations.append(self._fleet_score_count_validation(name))
@@ -90,7 +90,7 @@ class ValidationGenerator:
         ))
         if "plan" in cadenza_completion_phases:
             validations.append(
-                self._cadenza_completion_validation(name, "plan", 2, plan_path)
+                self._cadenza_completion_validation(name, "plan", 2, plan_path, agents_dir)
             )
 
         # User-defined work validations (TDD — test commands etc.)
@@ -138,7 +138,7 @@ class ValidationGenerator:
         ))
         if "work" in cadenza_completion_phases:
             validations.append(
-                self._cadenza_completion_validation(name, "work", 3, work_path)
+                self._cadenza_completion_validation(name, "work", 3, work_path, agents_dir)
             )
 
         # Integration report
@@ -153,7 +153,7 @@ class ValidationGenerator:
         if "integration" in cadenza_completion_phases:
             validations.append(
                 self._cadenza_completion_validation(
-                    name, "integration", 5, integration_path
+                    name, "integration", 5, integration_path, agents_dir
                 )
             )
 
@@ -168,7 +168,7 @@ class ValidationGenerator:
         ))
         if "play" in cadenza_completion_phases:
             validations.append(
-                self._cadenza_completion_validation(name, "play", 6, play_path)
+                self._cadenza_completion_validation(name, "play", 6, play_path, agents_dir)
             )
 
         # Inspection report
@@ -183,7 +183,7 @@ class ValidationGenerator:
         if "inspect" in cadenza_completion_phases:
             validations.append(
                 self._cadenza_completion_validation(
-                    name, "inspect", 7, inspection_path
+                    name, "inspect", 7, inspection_path, agents_dir
                 )
             )
 
@@ -209,7 +209,7 @@ class ValidationGenerator:
         ))
         if "aar" in cadenza_completion_phases:
             validations.append(
-                self._cadenza_completion_validation(name, "aar", 8, aar_path)
+                self._cadenza_completion_validation(name, "aar", 8, aar_path, agents_dir)
             )
         if defaults.get("score_shape") == "targeted-work" and agents_dir:
             validations.extend(
@@ -228,7 +228,7 @@ class ValidationGenerator:
         if "consolidate" in cadenza_completion_phases:
             validations.append(
                 self._cadenza_completion_validation(
-                    name, "consolidate", 9, consolidation_path
+                    name, "consolidate", 9, consolidation_path, agents_dir
                 )
             )
         reflection_path = f"{{workspace}}/cycle-state/{name}-reflection.md"
@@ -241,7 +241,9 @@ class ValidationGenerator:
         ))
         if "reflect" in cadenza_completion_phases:
             validations.append(
-                self._cadenza_completion_validation(name, "reflect", 10, reflection_path)
+                self._cadenza_completion_validation(
+                    name, "reflect", 10, reflection_path, agents_dir
+                )
             )
 
         # Maturity check (CLI instrument, sheet 11)
@@ -289,7 +291,7 @@ class ValidationGenerator:
         if "resurrect" in cadenza_completion_phases:
             validations.append(
                 self._cadenza_completion_validation(
-                    name, "resurrect", 12, resurrection_path
+                    name, "resurrect", 12, resurrection_path, agents_dir
                 )
             )
         if defaults.get("score_shape") == "lifecycle-integration" and agents_dir:
@@ -683,6 +685,7 @@ PY"""
         phase: str,
         stage: int,
         artifact_path: str,
+        agents_dir: str,
     ) -> dict[str, Any]:
         """Validate the canonical four-file cadenza without inventing schemas.
 
@@ -691,8 +694,15 @@ PY"""
         marker naming the blocked shared active file.
         """
         artifact_rel = artifact_path.removeprefix("{workspace}/")
+        identity_dir = (
+            f"{agents_dir}/{agent_name}"
+            if agents_dir
+            else f"~/.marianne/agents/{agent_name}"
+        )
         command = (
-            f'WORKSPACE="{{workspace}}" AGENT={agent_name!r} PHASE={phase!r} '
+            f'WORKSPACE="{{workspace}}" '
+            f"AGENT_DIR={shlex.quote(identity_dir)} "
+            f'AGENT={agent_name!r} PHASE={phase!r} '
             f'ARTIFACT="{artifact_path}" ARTIFACT_REL={artifact_rel!r} '
             """python - <<'PY'
 import os
@@ -701,16 +711,18 @@ import sys
 from pathlib import Path
 
 workspace = Path(os.environ["WORKSPACE"])
+agent_dir = Path(os.environ["AGENT_DIR"]).expanduser()
 agent = os.environ["AGENT"].lower()
 phase = os.environ["PHASE"].lower()
 artifact = Path(os.environ["ARTIFACT"])
 artifact_rel = os.environ["ARTIFACT_REL"]
 artifact_name = Path(artifact_rel).name
 
-task_board = workspace / "shared" / "active" / "01-task-board.md"
-status_board = workspace / "shared" / "active" / "02-status.md"
-directives = workspace / "shared" / "active" / "03-urgent-directives.md"
-handoffs = workspace / "shared" / "active" / "04-handoffs.md"
+cadenza = agent_dir / "cadenzas" / "personal" / "active"
+task_board = cadenza / "01-task-board.md"
+status_board = cadenza / "02-status.md"
+directives = cadenza / "03-urgent-directives.md"
+handoffs = cadenza / "04-handoffs.md"
 artifact_text = artifact.read_text(errors="replace") if artifact.exists() else ""
 
 marker = "COORDINATION UPDATE BLOCKED:"
