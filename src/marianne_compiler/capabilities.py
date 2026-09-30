@@ -232,14 +232,114 @@ def bind_score_to_capabilities(
     if not isinstance(sheet, dict):
         raise CapabilityResolutionError("Score sheet section must be a mapping")
     sheet["per_sheet_instruments"] = resolved["per_sheet_instruments"]
-    sheet["per_sheet_instrument_config"] = resolved["per_sheet_instrument_config"]
+    existing_config = sheet.get("per_sheet_instrument_config", {})
+    if not isinstance(existing_config, dict):
+        raise CapabilityResolutionError(
+            "Score sheet per_sheet_instrument_config must be a mapping"
+        )
+    merged_config = copy.deepcopy(existing_config)
+    for phase, route_config in resolved["per_sheet_instrument_config"].items():
+        prior = merged_config.get(phase, merged_config.get(str(phase), {}))
+        if not isinstance(prior, dict) or not isinstance(route_config, dict):
+            raise CapabilityResolutionError(
+                f"Per-sheet instrument config for phase {phase} must be a mapping"
+            )
+        merged_config[phase] = {**prior, **route_config}
+    sheet["per_sheet_instrument_config"] = merged_config
     sheet["per_sheet_fallbacks"] = resolved["per_sheet_fallbacks"]
     contract["routing_receipts"] = defaults["routing_receipts"]
     contract["bound_at"] = _format_time((now or datetime.now(UTC)).astimezone(UTC))
     contract["run_workspace"] = str(workspace)
     bound["workspace"] = str(workspace)
     _bind_personal_cadenza_validations(bound)
-    return _localize_home_paths(bound)
+    bound = _localize_home_paths(bound)
+    _bind_personal_cadenza_prompt_extensions(bound)
+    return bound
+
+
+def _bind_personal_cadenza_prompt_extensions(score: dict[str, Any]) -> None:
+    """Tell each sheet using the canonical active cadenza where it lives.
+
+    The coordination technique describes workspace ``shared/active`` as its
+    normal transport. For persistent-agent scores that attach a canonical
+    personal active cadenza, the run artifact must make that producer/consumer
+    boundary explicit: the injected canonical files stay authoritative and are
+    not copied into the run workspace. This does not alter installed templates
+    or weaken their canonical-path validations.
+    """
+    prompt = score.get("prompt")
+    variables = prompt.get("variables") if isinstance(prompt, dict) else None
+    identity_dir = (
+        variables.get("agent_identity_dir")
+        if isinstance(variables, dict)
+        else None
+    )
+    sheet = score.get("sheet")
+    cadenzas = sheet.get("cadenzas") if isinstance(sheet, dict) else None
+    if not isinstance(identity_dir, str) or not identity_dir.strip():
+        return
+    if not isinstance(cadenzas, dict):
+        return
+
+    identity_dir = identity_dir.rstrip("/")
+    canonical_cadenza = f"{identity_dir}/cadenzas/personal/active"
+    guidance = (
+        f"Canonical agent memory root: {identity_dir}.\n"
+        f"Canonical personal active cadenza (attached source): {canonical_cadenza}.\n"
+        "The attached cadenza records and canonical memory are the authoritative "
+        "agent data, not workspace copies. Read the attached records in place. "
+        "Do not copy or recreate these records under workspace/shared/active; "
+        "the coordination technique's generic shared/active example does not "
+        "override this score's canonical attachment or its validations. When "
+        "the task requires a cadenza or memory update, edit the canonical files "
+        "in place. Keep engagement-specific artifacts in the run workspace."
+    )
+    marker = "Canonical personal active cadenza (attached source):"
+    all_attached = False
+    target_sheets: list[int] = []
+    for phase, items in cadenzas.items():
+        if not isinstance(items, list):
+            continue
+        attached = any(
+            isinstance(item, dict)
+            and item.get("directory") == canonical_cadenza
+            for item in items
+        )
+        if not attached:
+            continue
+        if str(phase).lower() == "all":
+            all_attached = True
+            break
+        try:
+            target_sheets.append(int(phase))
+        except (TypeError, ValueError):
+            continue
+
+    if all_attached:
+        extensions = prompt.setdefault("prompt_extensions", [])
+        if not isinstance(extensions, list):
+            raise CapabilityResolutionError(
+                "Canonical cadenza binding requires prompt.prompt_extensions to be a list"
+            )
+        if not any(isinstance(item, str) and marker in item for item in extensions):
+            extensions.append(guidance)
+        return
+
+    if not target_sheets:
+        return
+    extensions_by_sheet = sheet.setdefault("prompt_extensions", {})
+    if not isinstance(extensions_by_sheet, dict):
+        raise CapabilityResolutionError(
+            "Canonical cadenza binding requires sheet.prompt_extensions to be a mapping"
+        )
+    for sheet_num in sorted(set(target_sheets)):
+        extensions = extensions_by_sheet.setdefault(sheet_num, [])
+        if not isinstance(extensions, list):
+            raise CapabilityResolutionError(
+                f"Canonical cadenza prompt_extensions for sheet {sheet_num} must be a list"
+            )
+        if not any(isinstance(item, str) and marker in item for item in extensions):
+            extensions.append(guidance)
 
 
 def _bind_personal_cadenza_validations(score: dict[str, Any]) -> None:

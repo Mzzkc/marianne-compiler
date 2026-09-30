@@ -492,6 +492,15 @@ def test_concrete_score_binding_localizes_home_paths_without_retargeting_cadenza
     assert bound["prompt"]["variables"]["agent_identity_dir"] == str(
         canonical_agent
     ).replace(str(home), "~", 1)
+    guidance = bound["prompt"]["prompt_extensions"][0]
+    expected_identity = str(canonical_agent).replace(str(home), "~", 1)
+    assert f"Canonical agent memory root: {expected_identity}" in guidance
+    assert (
+        f"Canonical personal active cadenza (attached source): {expected_cadenza}"
+        in guidance
+    )
+    assert "Do not copy or recreate these records under workspace/shared/active" in guidance
+    assert "edit the canonical files in place" in guidance
     bound_command = bound["validations"][0]["command"]
     assert "AGENT_DIR='~/Projects/AGENTS/agents/journey'" in bound_command
     assert 'agent_dir / "cadenzas" / "personal" / "active"' in bound_command
@@ -516,6 +525,66 @@ def test_concrete_score_binding_localizes_home_paths_without_retargeting_cadenza
         env={**os.environ, "HOME": str(home)},
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_canonical_cadenza_guidance_is_scoped_to_attached_sheets(
+    tmp_path: Path,
+) -> None:
+    identity_dir = tmp_path / "AGENTS" / "agents" / "journey"
+    active_dir = identity_dir / "cadenzas" / "personal" / "active"
+    score = {
+        "sheet": {
+            "per_sheet_instrument_config": {
+                1: {"timeout_seconds": 300, "temperature": 0.2},
+                3: {"timeout_seconds": 600},
+            },
+            "cadenzas": {
+                1: [{"directory": str(active_dir), "required": True}],
+                2: [{"directory": "{{workspace}}/shared/active", "required": True}],
+            }
+        },
+        "prompt": {
+            "variables": {
+                "agent_identity_dir": str(identity_dir),
+                "marianne_agent": {
+                    "schema_version": 1,
+                    "agent_id": "journey",
+                    "score_shape": "targeted-work",
+                    "phase_requirements": {
+                        "work": {"required_capabilities": ["file_editing"]}
+                    },
+                    "routing_receipts": {},
+                },
+            }
+        },
+    }
+    inventory = {
+        "profiles": [
+            _profile(
+                "verified",
+                provider="openai",
+                model="gpt-5.6-codex",
+                capabilities=["file_editing"],
+            )
+        ]
+    }
+
+    bound = bind_score_to_capabilities(
+        score, inventory, run_workspace=tmp_path / "run", now=NOW
+    )
+
+    extensions = bound["sheet"]["prompt_extensions"]
+    assert set(extensions) == {1}
+    assert "Canonical personal active cadenza (attached source):" in extensions[1][0]
+    assert "prompt_extensions" not in bound["prompt"]
+    assert "prompt_extensions" not in score["sheet"]
+    assert bound["sheet"]["per_sheet_instrument_config"][1] == {
+        "timeout_seconds": 300,
+        "temperature": 0.2,
+    }
+    assert bound["sheet"]["per_sheet_instrument_config"][3] == {
+        "timeout_seconds": 600
+    }
 
 
 def test_score_binding_rejects_workspace_with_prior_lifecycle_evidence(
