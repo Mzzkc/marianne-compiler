@@ -56,10 +56,12 @@ class TestSheetComposer:
         deps = result["dependencies"]
         assert deps[5] == [4]
         assert deps[6] == [4]
-        assert deps[7] == [4]
+        # Inspect reviews the integrated state (GH #462)
+        assert deps[7] == [5]
         assert set(deps[8]) == {5, 6, 7}
         assert set(deps[9]) == {5, 6, 7}
-        assert set(deps[10]) == {5, 6, 7}
+        # Reflect reads consolidated memory (GH #464)
+        assert deps[10] == [9]
 
     def test_has_dependencies(self) -> None:
         """Sheet config includes proper dependency DAG."""
@@ -74,9 +76,11 @@ class TestSheetComposer:
         # phase 2 fan-out depends on temperature check
         assert deps[5] == [4]
         assert deps[6] == [4]
-        assert deps[7] == [4]
-        # phase 3 depends on all of phase 2
+        # inspect depends on integration (GH #462)
+        assert deps[7] == [5]
+        # AAR depends on all of phase 2; reflect on consolidate (GH #464)
         assert set(deps[8]) == {5, 6, 7}
+        assert deps[10] == [9]
         # resurrect depends on maturity check
         assert deps[12] == [11]
 

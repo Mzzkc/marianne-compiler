@@ -172,8 +172,8 @@ defaults:
       prelude_listing_max_tokens: 2000
 
   parallel_phases:
-    phase_2: [integration, play, inspect]  # fan-out after work
-    phase_3: [aar, consolidate, reflect]   # fan-out after phase 2
+    phase_2: [integration, play, inspect]  # integration ∥ play; inspect after integration (GH #462)
+    phase_3: [aar, consolidate, reflect]   # aar ∥ consolidate; reflect after consolidate (GH #464)
 
   chain:
     max_depth: 1000
@@ -249,8 +249,8 @@ For agents migrating from the v3 orchestra, existing memories and meditations in
 **Sheet Composer** — Takes the agent definition and produces the sheet structure:
 - Phase 1 (sequential): Recon → Plan → Work
 - Phase 1.5 (CLI instrument): Temperature check (gates Play in Phase 2)
-- Phase 2 (fan-out): Integration ∥ Play ∥ Inspect (3 parallel instances, different prompt per instance)
-- Phase 3 (fan-out): AAR ∥ Consolidate ∥ Reflect (3 parallel instances)
+- Phase 2 (fan-out): Integration ∥ Play, then Inspect after Integration — Inspect reviews the integrated state (GH #462)
+- Phase 3 (fan-out): AAR ∥ Consolidate, then Reflect after Consolidate — Reflect reads consolidated memory and the profile has one writer at a time (GH #464)
 - Phase 3.5 (CLI instrument): Maturity check (measurement, feeds Resurrect)
 - Phase 4 (sequential): Resurrect
 

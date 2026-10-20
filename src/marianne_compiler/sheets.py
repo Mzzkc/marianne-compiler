@@ -5,7 +5,7 @@ Generates a 12-sheet cycle structure with parallel dependency phases:
     Phase 1   (sequential):   Recon -> Plan -> Work          (sheets 1-3)
     Phase 1.5 (CLI):          Temperature check (gates Play)  (sheet 4)
     Phase 2   (parallel):     Integration || Play || Inspect  (sheets 5-7)
-    Phase 3   (parallel):     AAR || Consolidate || Reflect   (sheets 8-10)
+    Phase 3   (parallel):     AAR || Consolidate -> Reflect  (sheets 8-10)
     Phase 3.5 (CLI):          Maturity check                  (sheet 11)
     Phase 4   (sequential):   Resurrect                       (sheet 12)
 
@@ -317,12 +317,17 @@ class SheetComposer:
             2: [1],       # plan depends on recon
             3: [2],       # work depends on plan
             4: [3],       # temperature check depends on work
-            5: [4],       # phase 2 fan-out depends on temperature check
-            6: [4],
-            7: [4],
-            8: [5, 6, 7],  # phase 3 fan-out depends on all of phase 2
-            9: [5, 6, 7],
-            10: [5, 6, 7],
+            5: [4],       # integration depends on temperature check
+            6: [4],       # play runs beside integration
+            # Inspect reviews the INTEGRATED state, so it waits for
+            # Integration (Pallas field, GH #462): dispatched together, the
+            # inspection artifact was written before the merge it judged.
+            7: [5],
+            8: [5, 6, 7],  # AAR depends on all of phase 2
+            9: [5, 6, 7],  # consolidate depends on all of phase 2
+            # Reflect reads CONSOLIDATED memory and the profile has one
+            # writer at a time (GH #464): Reflect waits for Consolidate.
+            10: [9],
             11: [8, 9, 10],  # maturity check depends on all of phase 3
             12: [11],        # resurrect depends on maturity check
         }
