@@ -187,7 +187,10 @@ class ValidationGenerator:
                 f'"{inspection_path}"'
             ),
             "condition": "stage == 7",
-            "description": f"Inspection report for {name} states a real verdict (ACCEPT/REWORK/PASS/FAIL/REJECT)",
+            "description": (
+                f"Inspection report for {name} states a real verdict "
+                "(ACCEPT/REWORK/PASS/FAIL/REJECT)"
+            ),
             "timeout_seconds": 10,
         })
         if "inspect" in cadenza_completion_phases:
@@ -255,6 +258,23 @@ class ValidationGenerator:
                     name, "reflect", 10, reflection_path, agents_dir
                 )
             )
+
+        # Cycle verdict (GH #463): written by the AAR sheet's run trigger, so
+        # it is checked on the first sheet that waits for AAR (maturity, 11).
+        if defaults.get("verdict", True) is not False:
+            validations.append({
+                "type": "command_succeeds",
+                "command": (
+                    "grep -qE '^verdict: (ACCEPT|ACCEPT_WITH_HOLDS|REWORK)$' "
+                    f'"{{workspace}}/cycle-state/{name}-verdict.yaml"'
+                ),
+                "condition": "stage == 11",
+                "description": (
+                    f"Cycle verdict for {name} is ACCEPT, ACCEPT_WITH_HOLDS or REWORK "
+                    "(UNDETERMINED fails: the inspection carried no real VERDICT)"
+                ),
+                "timeout_seconds": 10,
+            })
 
         # Maturity check (CLI instrument, sheet 11)
         validations.append({

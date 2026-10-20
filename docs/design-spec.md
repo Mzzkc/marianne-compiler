@@ -286,6 +286,14 @@ The technique manifest tells the agent what they can do:
 4. Emit `per_sheet_instruments` and `per_sheet_instrument_config` in the score YAML
 5. Do not append unrelated catalog instruments; if a sheet may use an instrument, declare it in that tier
 
+**Cycle verdict (GH #463)** — The AAR sheet carries an `on_success` `run` trigger that
+folds the Inspect sheet's enforced `VERDICT:` line and the AAR's `DELTA:` into
+`cycle-state/<agent>-verdict.yaml` (`verdict: ACCEPT | ACCEPT_WITH_HOLDS | REWORK |
+UNDETERMINED`, with the rule and both inputs recorded) by a deterministic shell step,
+no model call. The maturity sheet validates the enum (UNDETERMINED fails). A downstream
+gate reads one fixed-schema file instead of parsing prose. `defaults.verdict: false`
+turns it off.
+
 **Validation Generator** — Produces per-sheet validations:
 - TDD checks (test commands from config, applied to work sheets)
 - Coverage validations (applied to work and inspect sheets)

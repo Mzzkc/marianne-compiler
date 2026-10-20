@@ -277,3 +277,45 @@ class TestCompiledCliPhaseTemplates:
         assert result.returncode == 0, result.stderr
         assert report.exists()
         assert "current_stage: recognition" in report.read_text()
+
+
+class TestVerdictTrigger:
+    """GH #463: a machine-readable cycle verdict without a new model call."""
+
+    def test_aar_sheet_carries_the_verdict_run_trigger(self) -> None:
+        composer = SheetComposer()
+        result = composer.compose(_make_agent_def(), _make_defaults())
+        trigger = result["triggers"][8]["on_success"][0]["run"]
+        assert "-verdict.yaml" in trigger["command"]
+        assert trigger["timeout_seconds"] == 30
+        off = composer.compose(_make_agent_def(), {**_make_defaults(), "verdict": False})
+        assert "triggers" not in off
+
+    def test_generated_verdict_rule_against_real_artifacts(self, tmp_path) -> None:
+        import shutil
+        import subprocess
+
+        if shutil.which("bash") is None:
+            return
+        command = SheetComposer()._build_verdict_trigger("guide", {})[8]["on_success"][0][
+            "run"
+        ]["command"]
+        cases = {
+            "ACCEPT": ("VERDICT: ACCEPT\nEVIDENCE:\n", "DELTA: none\n"),
+            "ACCEPT_WITH_HOLDS": ("VERDICT: PASS — fine\n", "DELTA: two tests still red\n"),
+            "REWORK": ("VERDICT: reject\n", "DELTA: none\n"),
+            "UNDETERMINED": ("VERDICT: PENDING\n", "DELTA: none\n"),
+        }
+        for want, (inspection, aar) in cases.items():
+            ws = tmp_path / want
+            (ws / "cycle-state").mkdir(parents=True)
+            (ws / "cycle-state" / "guide-inspection.md").write_text(inspection)
+            (ws / "cycle-state" / "guide-aar.md").write_text(aar)
+            rc = subprocess.run(
+                ["bash", "-c", command.replace("{workspace}", str(ws))],
+                check=False, capture_output=True, text=True, cwd=ws,
+            ).returncode
+            assert rc == 0, want
+            text = (ws / "cycle-state" / "guide-verdict.yaml").read_text()
+            assert f"verdict: {want}\n" in text, (want, text)
+            assert "kind: marianne-cycle-verdict" in text

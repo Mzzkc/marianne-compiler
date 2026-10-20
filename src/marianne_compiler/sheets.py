@@ -116,7 +116,68 @@ class SheetComposer:
         if prompt_extensions:
             sheet_config["prompt_extensions"] = prompt_extensions
 
+        triggers = self._build_verdict_trigger(name, defaults)
+        if triggers:
+            sheet_config["triggers"] = triggers
+
         return sheet_config
+
+    def _build_verdict_trigger(
+        self, name: str, defaults: dict[str, Any],
+    ) -> dict[int, dict[str, Any]]:
+        """A machine-readable verdict after AAR, without a new model call.
+
+        GH #463: nothing in the 12-sheet cycle produced a fixed-enum verdict
+        a downstream gate could read without parsing prose. The Inspect
+        sheet's ``VERDICT:`` line is enforced (ACCEPT|REWORK|PASS|FAIL|REJECT,
+        GH #461) and the AAR carries ``DELTA:``; a ``run`` trigger on the AAR
+        sheet's success folds them into ``cycle-state/<name>-verdict.yaml``
+        under a pre-fixed rule, so the verdict is derived from the cycle's
+        own evidence by a deterministic shell step. ``defaults.verdict:
+        false`` turns it off.
+        """
+        if defaults.get("verdict", True) is False:
+            return {}
+        inspection = f"{{workspace}}/cycle-state/{name}-inspection.md"
+        aar = f"{{workspace}}/cycle-state/{name}-aar.md"
+        out = f"{{workspace}}/cycle-state/{name}-verdict.yaml"
+        command = "\n".join([
+            "set -eu",
+            f'inspect={shlex.quote(inspection)}; aar={shlex.quote(aar)}; out={shlex.quote(out)}',
+            "raw=$(grep -iE '^VERDICT:' \"$inspect\" | head -1 | "
+            "sed -E 's/^VERDICT:[[:space:]]*//I' | tr '[:lower:]' '[:upper:]' | "
+            "grep -oE '^(ACCEPT|REWORK|PASS|FAIL|REJECT)' || true)",
+            "case \"$raw\" in",
+            "  ACCEPT|PASS) verdict=ACCEPT ;;",
+            "  REWORK|FAIL|REJECT) verdict=REWORK ;;",
+            "  *) verdict=UNDETERMINED ;;",
+            "esac",
+            "delta=$(grep -iE '^DELTA:' \"$aar\" | head -1 | "
+            "sed -E 's/^DELTA:[[:space:]]*//I' | cut -c1-200 || true)",
+            # ACCEPT with a non-empty AAR delta still has holds to carry.
+            "if [ \"$verdict\" = ACCEPT ] && [ -n \"$delta\" ] && "
+            "! printf '%s' \"$delta\" | grep -qiE '^(none|no delta|n/a|-|nothing)[[:space:].]*$'; "
+            "then verdict=ACCEPT_WITH_HOLDS; fi",
+            "{",
+            "  printf 'schema_version: 1\\nkind: marianne-cycle-verdict\\n'",
+            f"  printf 'agent: {name}\\n'",
+            "  printf 'verdict: %s\\n' \"$verdict\"",
+            "  printf 'inspection_verdict: %s\\n' \"${raw:-MISSING}\"",
+            "  printf 'aar_delta: %s\\n' \"$(printf '%s' \"$delta\" | "
+            "sed -e \"s/'/''/g\" -e \"s/^/'/\" -e \"s/$/'/\")\"",
+            "  printf 'rule: ACCEPT|PASS->ACCEPT; REWORK|FAIL|REJECT->REWORK; "
+            "ACCEPT with a non-empty AAR DELTA->ACCEPT_WITH_HOLDS; else UNDETERMINED\\n'",
+            "  printf 'decided_at: %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"",
+            "} > \"$out.tmp\" && mv \"$out.tmp\" \"$out\"",
+            "echo \"verdict: $verdict\"",
+        ])
+        return {
+            PHASE_MAP["aar"][0]: {
+                "on_success": [{
+                    "run": {"command": command, "timeout_seconds": 30},
+                }],
+            },
+        }
 
     def _build_score_shape(
         self,
