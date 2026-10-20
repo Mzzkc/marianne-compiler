@@ -167,6 +167,9 @@ def build_phase_template(
                 "skeleton written at the start must be completed before the sheet "
                 "ends, or the sheet fails.",
                 "- Ground claims in file paths, command output, or observed workspace state.",
+                "- Make probe clones, mutant trees and worktrees under `$MARIANNE_SCRATCH` "
+                "(the conductor deletes it when the job ends), never in a system temp "
+                "directory.",
                 "- If shared active cadenza files are available in this phase, read "
                 "all four direct files: `01-task-board.md`, `02-status.md`, "
                 "`03-urgent-directives.md`, and `04-handoffs.md`. Treat urgent "
