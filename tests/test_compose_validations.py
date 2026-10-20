@@ -230,6 +230,41 @@ class TestValidationGenerator:
         ]
         assert len(inspect_vals) >= 1
 
+    def test_artifacts_refuse_placeholder_state_and_inspect_needs_a_real_verdict(self) -> None:
+        """GH #461: a t+0 skeleton (section labels + PENDING) must not pass."""
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        gen = ValidationGenerator()
+        result = gen.generate(_make_agent_def("guide"), {})
+        placeholder = [v for v in result if "placeholder" in v.get("description", "")]
+        verdict = [v for v in result if "real verdict" in v.get("description", "")]
+        assert placeholder, "every artifact gets the no-placeholder check"
+        assert len(verdict) == 1 and verdict[0]["condition"] == "stage == 7"
+        inspect_checks = [
+            v for v in placeholder if "inspection" in v["description"].lower()
+        ]
+        assert len(inspect_checks) == 1
+        if shutil.which("bash") is None:
+            return
+        with tempfile.TemporaryDirectory() as temp:
+            ws = Path(temp)
+            (ws / "cycle-state").mkdir()
+            art = ws / "cycle-state" / "guide-inspection.md"
+            skeleton = (
+                "VERDICT: PENDING — verification in progress\nEVIDENCE:\n"
+                "FAILURES:\nRISKS:\nREQUIRED FIXES:\n" + "word " * 100
+            )
+            finished = skeleton.replace("PENDING — verification in progress", "REWORK")
+            for text, expect_pass in ((skeleton, False), (finished, True)):
+                art.write_text(text, encoding="utf-8")
+                for check in (inspect_checks[0], verdict[0]):
+                    cmd = check["command"].replace("{workspace}", str(ws))
+                    rc = subprocess.run(["bash", "-c", cmd], check=False).returncode
+                    assert (rc == 0) == expect_pass, (check["description"], text[:40], rc)
+
     def test_agent_name_in_paths(self) -> None:
         """Agent name is correctly embedded in file paths."""
         gen = ValidationGenerator()

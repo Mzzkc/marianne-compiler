@@ -180,6 +180,16 @@ class ValidationGenerator:
             min_words=80,
             required_sections=["VERDICT", "EVIDENCE", "FAILURES", "RISKS", "REQUIRED FIXES"],
         ))
+        validations.append({
+            "type": "command_succeeds",
+            "command": (
+                f"grep -qiE '^VERDICT:[[:space:]]*(ACCEPT|REWORK|PASS|FAIL|REJECT)' "
+                f'"{inspection_path}"'
+            ),
+            "condition": "stage == 7",
+            "description": f"Inspection report for {name} states a real verdict (ACCEPT/REWORK/PASS/FAIL/REJECT)",
+            "timeout_seconds": 10,
+        })
         if "inspect" in cadenza_completion_phases:
             validations.append(
                 self._cadenza_completion_validation(
@@ -659,6 +669,20 @@ PY"""
                 "condition": condition,
                 "description": f"{description} contains {section}",
             })
+        # A t+0 skeleton (the agent writes the section labels first so a
+        # crash leaves evidence) satisfies every check above. A retry that
+        # completes without rewriting the artifact then passes on no work
+        # (Pallas, GH #461). The artifact must carry no placeholder state.
+        validations.append({
+            "type": "command_succeeds",
+            "command": (
+                f"! grep -qiE '^[A-Z][A-Z ]*:[[:space:]]*(PENDING|TBD|TODO|IN PROGRESS)' "
+                f'"{path}"'
+            ),
+            "condition": condition,
+            "description": f"{description} carries no PENDING/TBD placeholder line",
+            "timeout_seconds": 10,
+        })
         return validations
 
     def _cadenza_completion_phases(self, defaults: dict[str, Any]) -> set[str]:

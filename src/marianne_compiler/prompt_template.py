@@ -89,6 +89,9 @@ PHASE_OUTPUTS: dict[str, list[str]] = {
     "inspect": [
         "Write `{{ workspace }}/cycle-state/{{ agent_name }}-inspection.md`.",
         _exact_section_labels("VERDICT", "EVIDENCE", "FAILURES", "RISKS", "REQUIRED FIXES"),
+        "VERDICT: must be ACCEPT, REWORK, PASS, FAIL or REJECT. A PENDING or TBD "
+        "line is not a verdict: the sheet fails on it, and so does a retry that "
+        "leaves the file unrewritten.",
     ],
     "aar": [
         "Write `{{ workspace }}/cycle-state/{{ agent_name }}-aar.md`.",
@@ -160,6 +163,9 @@ def build_phase_template(
             lines.extend(f"- {item}" for item in outputs)
             lines.extend([
                 "- Do not claim completion unless the required artifact exists.",
+                "- Never leave a section at PENDING, TBD, TODO or IN PROGRESS: a "
+                "skeleton written at the start must be completed before the sheet "
+                "ends, or the sheet fails.",
                 "- Ground claims in file paths, command output, or observed workspace state.",
                 "- If shared active cadenza files are available in this phase, read "
                 "all four direct files: `01-task-board.md`, `02-status.md`, "
