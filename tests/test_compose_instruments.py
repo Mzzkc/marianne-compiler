@@ -246,7 +246,8 @@ class TestInstrumentResolver:
         agent = {"name": "bare", "voice": "v", "focus": "f"}
         result = resolver.resolve(agent, {})
 
-        assert result["instrument"] == "claude-code"
+        # No work tier: the packaged `strong` class, not one pinned profile (T6).
+        assert result["instrument"] == "strong"
         assert isinstance(result["per_sheet_instruments"], dict)
 
     def test_backend_config_from_primary(self) -> None:

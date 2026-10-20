@@ -268,8 +268,10 @@ class InstrumentResolver:
         work_tier = self._resolve_for_tier(
             "work", agent_instruments, default_instruments
         )
+        # No work tier declared: route through the packaged `strong` capability
+        # class (resolves per machine) rather than pinning one profile (T6).
         primary_instrument = (
-            self._alias_for(work_tier.get("primary", {})) or "claude-code"
+            self._alias_for(work_tier.get("primary", {})) or "strong"
         )
 
         # Score-level fallbacks mirror the work tier. Per-sheet fallbacks are

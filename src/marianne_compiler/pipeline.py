@@ -386,7 +386,7 @@ class CompilationPipeline:
             # Post-#347 shape: execution is configured exclusively through
             # the instrument plugin system — an instrument NAME (or
             # score-local alias), never a backend dict (#214).
-            "instrument": instrument_result.get("instrument", "claude-code"),
+            "instrument": instrument_result.get("instrument", "strong"),
             "instrument_fallbacks": instrument_result.get("instrument_fallbacks", []),
             "sheet": sheet_config,
             "prompt": prompt_config,
