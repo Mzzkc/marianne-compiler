@@ -817,6 +817,19 @@ Base layer runs on any laptop. Richer capabilities opt-in when resources allow.
 
 ---
 
+### 8.x `marianne-agents engage` (reuse ladder, first rung)
+
+One command binds, names and workspaces an engagement of an installed agent:
+`engage AGENT --purpose SLUG --inventory INV --runs-dir RUNS [--shape S]`. It
+reads `AGENTS_DIR/AGENT/scores/S.yaml` in place (never edits it), binds routes
+through `bind_score_to_capabilities`, names the job `S-AGENT-SLUG-YYYYMMDD`,
+writes the bound score to `RUNS/AGENT-SLUG-YYYYMMDD/` and uses that directory
+as the fresh workspace. The default shape is `full-lifecycle`; `targeted-work`
+requires `--defer-lifecycle`, which names the consolidate/reflect/maturity/
+resurrect debt a later `lifecycle-integration` engagement pays back. Binding the
+same agent, purpose and date twice is refused (one engagement, one directory).
+`bind-score-routes` remains the lower-level form.
+
 ## 9. Agent Lifecycle
 
 ### 9.1 Parallelized Cycle

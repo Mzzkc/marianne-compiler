@@ -9,7 +9,11 @@ from typing import Any
 import typer
 import yaml
 
-from marianne_compiler.agent_package import generate_agent_package, install_agent_package
+from marianne_compiler.agent_package import (
+    SCORE_SHAPES,
+    generate_agent_package,
+    install_agent_package,
+)
 from marianne_compiler.capabilities import (
     bind_config_to_capabilities,
     bind_score_to_capabilities,
@@ -204,6 +208,104 @@ def bind_score_routes_command(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(yaml.safe_dump(bound, sort_keys=False, allow_unicode=True))
     typer.echo(str(output))
+
+
+_DEFAULT_SHAPE = "full-lifecycle"
+_DEFERRING_SHAPE = "targeted-work"
+
+
+@app.command("engage")
+def engage_command(
+    agent: str = typer.Argument(..., help="Installed agent id (directory under --agents-dir)."),
+    purpose: str = typer.Option(
+        ..., "--purpose", "-p",
+        help="Short slug for this engagement (letters, digits, '-'); part of the job name.",
+    ),
+    inventory: Path = typer.Option(
+        ..., "--inventory", "-i", help="Live-verified capability inventory YAML.",
+    ),
+    runs_dir: Path = typer.Option(
+        ..., "--runs-dir", "-r",
+        help="Directory that receives one sub-directory per engagement (score + receipts).",
+    ),
+    shape: str = typer.Option(
+        _DEFAULT_SHAPE, "--shape", "-s",
+        help="full-lifecycle (default) | targeted-work | lifecycle-integration.",
+    ),
+    defer_lifecycle: bool = typer.Option(
+        False, "--defer-lifecycle",
+        help="Required with --shape targeted-work: acknowledges that consolidate, "
+        "reflect, maturity and resurrect become pending debt a lifecycle-integration "
+        "engagement must pay back.",
+    ),
+    workspaces_dir: Path | None = typer.Option(
+        None, "--workspaces-dir", "-w",
+        help="Root for the fresh engagement workspace; defaults to --runs-dir.",
+    ),
+    agents_dir: Path = typer.Option(
+        DEFAULT_AGENTS_DIR, "--agents-dir", help="Canonical box-local agent data root.",
+    ),
+    date: str | None = typer.Option(None, "--date", hidden=True, help="YYYYMMDD override."),
+    evidence_at: str | None = typer.Option(None, "--evidence-at", hidden=True),
+) -> None:
+    """Bind, name and workspace one engagement of an installed agent in one step.
+
+    The reuse ladder's first rung for persistent agents: the installed score is
+    read in place and never edited; the bound run artifact, the job name and the
+    fresh workspace are derived from AGENT, --shape, --purpose and today's date,
+    so every engagement is one command and nothing is hand-copied or hand-named.
+    """
+    if shape not in SCORE_SHAPES:
+        raise typer.BadParameter(
+            f"--shape must be one of: {', '.join(SCORE_SHAPES)}"
+        )
+    if shape == _DEFERRING_SHAPE and not defer_lifecycle:
+        raise typer.BadParameter(
+            "targeted-work defers consolidate, reflect, maturity and resurrect into "
+            "pending lifecycle debt. Pass --defer-lifecycle to confirm, and plan the "
+            "lifecycle-integration engagement that pays it back; otherwise use the "
+            "default full-lifecycle shape."
+        )
+    slug = purpose.strip().lower()
+    if not slug or not all(ch.isalnum() or ch == "-" for ch in slug):
+        raise typer.BadParameter("--purpose must be a slug of letters, digits and '-'")
+    agent_id = agent.strip()
+    installed = agents_dir.expanduser().resolve() / agent_id / "scores" / f"{shape}.yaml"
+    if not installed.is_file():
+        raise typer.BadParameter(
+            f"no installed {shape} score for agent {agent_id!r} at {installed}; "
+            "run marianne-agents install-package first"
+        )
+    stamp = date or datetime.now(UTC).strftime("%Y%m%d")
+    engagement = f"{agent_id}-{slug}-{stamp}"
+    job_name = f"{shape}-{engagement}"
+    run_dir = runs_dir.expanduser().resolve() / engagement
+    output = run_dir / f"{job_name}.yaml"
+    run_workspace = (workspaces_dir or runs_dir).expanduser().resolve() / engagement
+    if output.exists():
+        raise typer.BadParameter(
+            f"engagement already bound: {output}. One engagement is one directory; "
+            "pick another --purpose or resume the existing job with mzt resume."
+        )
+    score_data = _load_mapping(installed, "score")
+    inventory_data = _load_mapping(inventory, "inventory")
+    now = _parse_time(evidence_at) if evidence_at else datetime.now(UTC)
+    bound = bind_score_to_capabilities(
+        score_data, inventory_data, run_workspace=run_workspace, now=now,
+    )
+    bound["name"] = job_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    output.write_text(yaml.safe_dump(bound, sort_keys=False, allow_unicode=True))
+    typer.echo(f"job: {job_name}")
+    typer.echo(f"score: {output}")
+    typer.echo(f"workspace: {run_workspace}")
+    typer.echo(f"installed: {installed}")
+    if shape == _DEFERRING_SHAPE:
+        typer.echo(
+            "debt: targeted-work leaves lifecycle debt; engage "
+            f"{agent_id} with --shape lifecycle-integration afterwards", err=True,
+        )
+    typer.echo(f"run: mzt run {output}")
 
 
 def _load_mapping(path: Path, label: str) -> dict[str, Any]:
