@@ -830,6 +830,14 @@ resurrect debt a later `lifecycle-integration` engagement pays back. Binding the
 same agent, purpose and date twice is refused (one engagement, one directory).
 `bind-score-routes` remains the lower-level form.
 
+Lifecycle debt and integration-receipt hashes use one strict format: `sha256:`
+followed by exactly 64 lowercase hex characters (`recent_memory_before_sha256`,
+`recent_memory_after_sha256`, `source_debt_sha256`, `memory_before_sha256`,
+`memory_after_sha256`, `source_evidence_sha256`, `integration_receipt_sha256`,
+and every debt `evidence[].sha256`). The executable validators reject bare hex
+or uppercase, and the sheet instructions name the format explicitly (GH #498);
+a bare-hex hash in a live debt file stays invalid until the agent rewrites it.
+
 ## 9. Agent Lifecycle
 
 ### 9.1 Parallelized Cycle
@@ -839,13 +847,15 @@ Four main phases with CLI instrument gates:
 ```
 Phase 1   (sequential):   Recon → Plan → Work
 Phase 1.5 (CLI):          Temperature check (gates Play)
-Phase 2   (fan-out of 3): Integration ∥ Play ∥ Inspect
-Phase 3   (fan-out of 3): AAR ∥ Consolidate ∥ Reflect
+Phase 2   (fan-out):      Integration ∥ Play, then Inspect after Integration (GH #462)
+Phase 3   (fan-out):      AAR ∥ Consolidate, then Reflect after Consolidate (GH #464)
 Phase 3.5 (CLI):          Maturity check (feeds Resurrect)
 Phase 4   (sequential):   Resurrect
 ```
 
 Each fan-out instance gets a different prompt via Jinja2 conditionals on `instance`. The baton dispatches parallel instances concurrently. Temperature check gate applies to the Play instance — if skipped, Integration and Inspect still run.
+
+Serialization inside the fan-outs is deliberate: Inspect reviews the integrated state, so it waits for Integration (`7: [5]`, GH #462); Reflect reads consolidated memory and `profile.yaml` has one writer at a time, so it waits for Consolidate (`10: [9]`, GH #464). The packaged agent scores ship this DAG — a stale packaged DAG running Inspect or Reflect concurrently with its writer is the bug class GH #498 closed by regenerating the package.
 
 Total sheets: 12 per cycle. Effective sequential stages: 6 (Work dominates wall-clock time). The CLI instrument sheets are millisecond-fast bash checks, not LLM calls.
 
@@ -960,7 +970,7 @@ marianne-dev-fleet
 ├── architects (running)
 │   └── canyon (cycle 3, sheet 5/12 — Work)
 ├── builders (running)
-│   ├── forge (cycle 2, sheet 8/12 — Inspect)
+│   ├── forge (cycle 2, sheet 8/12 — AAR)
 │   └── ...
 └── auditors (waiting for builders)
     └── sentinel (pending)

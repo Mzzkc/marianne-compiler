@@ -208,7 +208,9 @@ class SheetComposer:
                         "Update canonical recent.md with only grounded learning from this "
                         "engagement; "
                         "use the stage-1 recent-memory snapshot as the before state and record "
-                        "the canonical file's SHA-256 after the write.",
+                        "the canonical file's SHA-256 after the write. Record "
+                        "recent_memory_before_sha256 and recent_memory_after_sha256 as "
+                        "`sha256:` followed by exactly 64 lowercase hex characters.",
                         f"Write `{debt_path}` as YAML after the immediate "
                         "AAR/recent-memory update.",
                         "Use schema_version: 1, kind: marianne-lifecycle-debt, this agent name, "
@@ -218,7 +220,8 @@ class SheetComposer:
                         "recent_memory_after_sha256, and pending_phases containing exactly "
                         "consolidate (consolidation), reflect (reflection), and resurrect "
                         "(resurrection). Evidence must be a non-empty list of workspace files, "
-                        "each with exact path and sha256. Do not mark deferred phases complete.",
+                        "each with exact path and sha256, as `sha256:` followed by exactly "
+                        "64 lowercase hex characters. Do not mark deferred phases complete.",
                     ]
                 },
             )
@@ -268,11 +271,15 @@ class SheetComposer:
                         "source_evidence_sha256, recalled_learning, and present_application. The "
                         "before hash must continue the captured source debt and the after hash "
                         "must "
-                        "match canonical recent.md after a real transition.",
+                        "match canonical recent.md after a real transition. Record "
+                        "source_debt_sha256, memory_before_sha256, memory_after_sha256, and "
+                        "source_evidence_sha256 as `sha256:` followed by exactly 64 lowercase "
+                        "hex characters.",
                         f"Update `{metadata}/pending-lifecycle-debt.yaml` to status: integrated, "
                         "preserve its source engagement, and bind it to the source debt and final "
                         "integration receipt with source_debt_sha256 and "
-                        "integration_receipt_sha256.",
+                        "integration_receipt_sha256, each as `sha256:` followed by exactly "
+                        "64 lowercase hex characters.",
                     ],
                 },
             )
@@ -371,8 +378,10 @@ class SheetComposer:
         """Build sheet dependency DAG.
 
         Sequential phases have linear dependencies.
-        Parallel phases depend on the previous sequential sheet.
-        Post-parallel phases depend on all parallel phase sheets.
+        Parallel phases start together but serialize on their shared writer:
+        Inspect waits for Integration (GH #462) and Reflect waits for
+        Consolidate (GH #464). Post-parallel phases depend on all parallel
+        phase sheets.
         """
         return {
             2: [1],       # plan depends on recon

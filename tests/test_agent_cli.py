@@ -163,6 +163,7 @@ def test_engage_targeted_work_needs_explicit_deferral(tmp_path: Path) -> None:
     base = [
         "engage", "canyon", "--purpose", "fix", "--inventory", str(inventory),
         "--runs-dir", str(runs), "--agents-dir", str(agents), "--shape", "targeted-work",
+        "--evidence-at", "2026-10-20T10:00:00Z",
     ]
     refused = runner.invoke(app, base)
     assert refused.exit_code != 0
