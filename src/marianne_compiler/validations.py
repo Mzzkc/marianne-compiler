@@ -812,15 +812,26 @@ def task_id_errors() -> list[str]:
             )
     return errors
 
+def evidence_binds_here(cell: str) -> bool:
+    # The row's evidence must name THIS run's artifact, not an earlier run's.
+    # Earlier engagements leave done rows whose evidence cell carries the same
+    # relative path (cycle-state/<agent>-recon.md), so a bare substring match
+    # passed before this run had written anything (GH #508). A cell binds here
+    # when it names the absolute artifact path, or the relative path while the
+    # artifact exists in THIS workspace: a row that points at a file this run
+    # has not produced is an earlier run's row, whatever its words.
+    if str(artifact) in cell:
+        return True
+    if artifact_rel in cell or artifact_name in cell:
+        return artifact.exists()
+    return False
+
 task_ok = False
 for cells in rows(task_board):
     lowered = [cell.lower() for cell in cells]
     owner_ok = agent in lowered
     state_ok = any(cell == "done" or cell.startswith("done ") for cell in lowered)
-    evidence_ok = any(
-        artifact_rel in cell or artifact_name in cell
-        for cell in cells
-    )
+    evidence_ok = any(evidence_binds_here(cell) for cell in cells)
     if owner_ok and state_ok and evidence_ok:
         task_ok = True
         break
@@ -932,7 +943,7 @@ num = (
 )
 claim_patterns = [
     re.compile(rf"\\b(?P<num>{{num}})\\s+(?:agent\\s+scores?|scored\\s+agents?|agent\\s+score\\s+files?)\\b"),
-    re.compile(rf"\\b(?:agent\\s+scores?|scored\\s+agents?|agent\\s+score\\s+files?)\\D{{0,24}}(?P<num>{{num}})\\b"),
+    re.compile(rf"\\b(?:agent\\s+scores?|scored\\s+agents?|agent\\s+score\\s+files?)\\D{{{{0,24}}}}(?P<num>{{num}})\\b"),
 ]
 bad: list[tuple[str, int]] = []
 for pattern in claim_patterns:
