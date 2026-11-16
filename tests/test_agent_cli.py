@@ -218,8 +218,12 @@ def test_engage_task_is_copied_immutably_and_injected_as_required_prelude(
     assert not os.access(copy, os.W_OK) or stat.S_IMODE(copy.stat().st_mode) == 0o444
     assert stat.S_IMODE(copy.stat().st_mode) == 0o444
     bound = yaml.safe_load(out.read_text())
-    assert {"file": str(copy), "as": "context", "required": True} in bound["sheet"]["prelude"]
+    assert {
+        "file": "{{ score_dir }}/task-brief.md", "as": "context", "required": True,
+    } in bound["sheet"]["prelude"]
+    assert str(engagement) not in str(bound["sheet"]["prelude"])
     receipt = bound["prompt"]["variables"]["marianne_agent"]["task"]
+    assert receipt["copy"] == "task-brief.md"
     assert receipt["sha256"] == f"sha256:{digest}"
     # Editing the source afterwards cannot change what the engagement reads.
     task.write_text("changed")
@@ -389,3 +393,50 @@ def test_engage_warns_when_symlinked_workspace_lands_on_another_filesystem(
     ])
     assert again.exit_code == 0, again.output
     assert "WARNING" not in again.output
+
+
+def test_attached_task_renders_to_the_copy_and_passes_v004(tmp_path: Path) -> None:
+    """The prelude template must resolve through the real runtime renderer."""
+    from marianne.core.config import JobConfig
+    from marianne.core.sheet import build_sheets
+    from marianne.daemon.baton.musician import _resolve_injections
+    from marianne.validation.checks.paths import AbsoluteHomePathCheck
+
+    from marianne_compiler.agent_cli import _attach_task
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    source = tmp_path / "my task (v2).md"
+    source.write_text("Do the thing.\n")
+    bound: dict = {
+        "name": "t",
+        "workspace": str(run_dir / "ws"),
+        "sheet": {"size": 1, "total_items": 1},
+        "prompt": {
+            "template": "go",
+            "variables": {"marianne_agent": {"schema_version": 1}},
+        },
+    }
+    _attach_task(bound, source, run_dir)
+    score = run_dir / "t.yaml"
+    score.write_text(yaml.safe_dump(bound, sort_keys=False))
+
+    config = JobConfig.from_yaml(score)
+    sheet = build_sheets(config)[0]
+    context, _skills, _tools = _resolve_injections(
+        sheet, sheet.template_variables(total_sheets=1, total_movements=1)
+    )
+    assert context == ["Do the thing.\n"]
+    # The copy lives beside the score, wherever the run directory is.
+    moved = tmp_path / "moved"
+    run_dir.rename(moved)
+    config = JobConfig.from_yaml(moved / "t.yaml")
+    sheet = build_sheets(config)[0]
+    context, _s, _t = _resolve_injections(
+        sheet, sheet.template_variables(total_sheets=1, total_movements=1)
+    )
+    assert context == ["Do the thing.\n"]
+    issues = AbsoluteHomePathCheck().check(
+        config, moved / "t.yaml", (moved / "t.yaml").read_text()
+    )
+    assert issues == []

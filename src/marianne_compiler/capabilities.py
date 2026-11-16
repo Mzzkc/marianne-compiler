@@ -472,6 +472,12 @@ def _bind_personal_cadenza_validations(score: dict[str, Any]) -> None:
         validation["command"] = command
 
 
+def localize_home_path(value: str) -> str:
+    """One absolute path under the home directory as a ``~``-relative path."""
+    result = _localize_home_paths(value)
+    return result if isinstance(result, str) else value
+
+
 def _localize_home_paths(value: Any) -> Any:
     """Replace machine-absolute home paths with runtime-expandable ``~`` paths.
 

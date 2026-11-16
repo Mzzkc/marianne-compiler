@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,7 @@ from marianne_compiler.capabilities import (
     MAX_TIMEOUT_SECONDS,
     bind_config_to_capabilities,
     bind_score_to_capabilities,
+    localize_home_path,
 )
 from marianne_compiler.identity import DEFAULT_AGENTS_DIR, IdentitySeeder
 from marianne_compiler.memory_census import census_agent_memory
@@ -519,18 +521,27 @@ def _attach_task(bound: dict[str, Any], source: Path, run_dir: Path) -> str:
     """
     data = source.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
-    copy = run_dir / f"task-{source.name}"
+    # The name is spliced into a Jinja path template, so keep it inert.
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", source.name)
+    copy_name = f"task-{safe_name}"
+    copy = run_dir / copy_name
     copy.write_bytes(data)
     os.chmod(copy, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
     sheet = bound.setdefault("sheet", {})
     prelude = sheet.setdefault("prelude", [])
     if not isinstance(prelude, list):
         raise typer.BadParameter("score sheet.prelude must be a list to attach --task")
-    prelude.append({"file": str(copy), "as": "context", "required": True})
+    # {{ score_dir }} is the bound score file's directory, rendered at run time
+    # by the conductor; an absolute path here would fail V004 and tie the bound
+    # score to this machine's home layout.
+    prelude.append(
+        {"file": f"{{{{ score_dir }}}}/{copy_name}", "as": "context", "required": True}
+    )
     contract = bound["prompt"]["variables"]["marianne_agent"]
     contract["task"] = {
-        "source": str(source),
-        "copy": str(copy),
+        "source": localize_home_path(str(source)),
+        "copy": copy_name,
+        "copy_relative_to": "score_dir",
         "sha256": f"sha256:{digest}",
     }
     return f"task: {source} sha256:{digest[:16]}"
