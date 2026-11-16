@@ -240,3 +240,28 @@ def test_engage_task_is_optional_and_missing_task_is_refused(tmp_path: Path) -> 
     assert missing.exit_code != 0
     assert "--task" in missing.output
     assert not (other / "runs").exists()
+
+
+def test_engage_step_and_idle_timeouts_flow_through_the_binder(tmp_path: Path) -> None:
+    result, _engagement, out = _engage(
+        tmp_path, "full-lifecycle", "--step-timeout", "7200", "--idle-timeout", "5400",
+    )
+    assert result.exit_code == 0, result.output
+    bound = yaml.safe_load(out.read_text())
+    contract = bound["prompt"]["variables"]["marianne_agent"]
+    assert contract["execution_limits"] == {
+        "step_timeout_seconds": 7200, "idle_timeout_seconds": 5400,
+    }
+    assert bound["stale_detection"]["idle_timeout_seconds"] == 5400
+    assert contract["routing_receipts"]["work"]["selected"][0]["timeout_seconds"] == 7200
+    assert all(a["config"]["timeout_seconds"] == 7200 for a in bound["instruments"].values())
+
+
+def test_engage_rejects_out_of_range_timeouts_before_writing(tmp_path: Path) -> None:
+    for flag, value in (("--step-timeout", "0"), ("--idle-timeout", "14401")):
+        sub = tmp_path / flag.strip("-")
+        sub.mkdir()
+        result, engagement, _out = _engage(sub, "full-lifecycle", flag, value)
+        assert result.exit_code != 0
+        assert "14400" in result.output
+        assert not engagement.exists()

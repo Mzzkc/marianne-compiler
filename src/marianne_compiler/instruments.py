@@ -308,10 +308,12 @@ class InstrumentResolver:
             name = entry
             model = ""
             provider = ""
+            timeout = 0
         elif isinstance(entry, dict):
             name = entry.get("instrument", "")
             model = entry.get("model", "")
             provider = entry.get("provider", "")
+            timeout = entry.get("timeout_seconds", 0)
         else:
             return ""
         if not name:
@@ -323,7 +325,14 @@ class InstrumentResolver:
         if provider:
             config["provider"] = provider
 
-        alias = name if not config else f"{name}--{_model_slug(model or provider)}"
+        if timeout:
+            # A fallback runs with its alias's config, not the sheet's, so the
+            # limit must live on the alias for every entry of the chain.
+            config["timeout_seconds"] = timeout
+        slug = _model_slug(model or provider) if (model or provider) else ""
+        if timeout:
+            slug = f"{slug}-t{timeout}" if slug else f"t{timeout}"
+        alias = f"{name}--{slug}" if slug else name
         existing = self._aliases.get(alias)
         if existing is None:
             self._aliases[alias] = {"profile": name, "config": config}

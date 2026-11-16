@@ -18,6 +18,7 @@ from marianne_compiler.agent_package import (
     install_agent_package,
 )
 from marianne_compiler.capabilities import (
+    MAX_TIMEOUT_SECONDS,
     bind_config_to_capabilities,
     bind_score_to_capabilities,
 )
@@ -248,6 +249,18 @@ def engage_command(
         "every sheet; its sha256 is recorded in the bound score's marianne_agent "
         "contract. Prefer this over appending to an agent's cadenza files.",
     ),
+    step_timeout: int | None = typer.Option(
+        None, "--step-timeout",
+        help="Per-attempt limit in seconds for every LLM sheet (primary and "
+        f"fallbacks); 1..{MAX_TIMEOUT_SECONDS}. Applied inside the binder so routing "
+        "receipts stay true; never edit a bound score to change it. The stock limit "
+        "is 1800 s.",
+    ),
+    idle_timeout: int | None = typer.Option(
+        None, "--idle-timeout",
+        help="Seconds without workspace output before stale detection fails a "
+        f"sheet; 1..{MAX_TIMEOUT_SECONDS}. Enables stale_detection.",
+    ),
     workspaces_dir: Path | None = typer.Option(
         None, "--workspaces-dir", "-w",
         help="Root for the fresh engagement workspace; defaults to --runs-dir.",
@@ -297,12 +310,18 @@ def engage_command(
             f"engagement already bound: {output}. One engagement is one directory; "
             "pick another --purpose or resume the existing job with mzt resume."
         )
+    for flag, value in (("--step-timeout", step_timeout), ("--idle-timeout", idle_timeout)):
+        if value is not None and not 0 < value <= MAX_TIMEOUT_SECONDS:
+            raise typer.BadParameter(
+                f"{flag} must be a positive integer of at most {MAX_TIMEOUT_SECONDS}"
+            )
     task_source = _check_task_file(task) if task is not None else None
     score_data = _load_mapping(installed, "score")
     inventory_data = _load_mapping(inventory, "inventory")
     now = _parse_time(evidence_at) if evidence_at else datetime.now(UTC)
     bound = bind_score_to_capabilities(
         score_data, inventory_data, run_workspace=run_workspace, now=now,
+        step_timeout_seconds=step_timeout, idle_timeout_seconds=idle_timeout,
     )
     bound["name"] = job_name
     run_dir.mkdir(parents=True, exist_ok=True)

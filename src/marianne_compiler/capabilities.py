@@ -17,6 +17,8 @@ class CapabilityResolutionError(ValueError):
     """No live instrument route can satisfy a phase contract."""
 
 
+MAX_TIMEOUT_SECONDS = 14400
+
 _RELIABILITY_RANK = {
     "high": 0,
     "standard": 1,
@@ -118,8 +120,14 @@ def bind_config_to_capabilities(
     inventory: dict[str, Any],
     *,
     now: datetime | None = None,
+    step_timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """Materialize compiler instrument tiers from semantic phase requirements."""
+    """Materialize compiler instrument tiers from semantic phase requirements.
+
+    ``step_timeout_seconds`` is applied to every selected route before the
+    receipts are written, so a receipt always describes the limit the compiled
+    route actually carries.
+    """
     bound = copy.deepcopy(config)
     defaults = bound.setdefault("defaults", {})
     if not isinstance(defaults, dict):
@@ -158,6 +166,13 @@ def bind_config_to_capabilities(
             "primary": _instrument_entry(selected[0]),
             "fallbacks": [_instrument_entry(item) for item in selected[1:]],
         }
+        if step_timeout_seconds is not None:
+            tier = instruments[phase_name]
+            tier["primary"]["timeout_seconds"] = step_timeout_seconds
+            for fallback in tier["fallbacks"]:
+                fallback["timeout_seconds"] = step_timeout_seconds
+            for item in selected:
+                item["timeout_seconds"] = step_timeout_seconds
         receipts[phase_name] = receipt
         bound_tiers.add(phase_name)
 
@@ -185,8 +200,26 @@ def bind_score_to_capabilities(
     *,
     run_workspace: Path,
     now: datetime | None = None,
+    step_timeout_seconds: int | None = None,
+    idle_timeout_seconds: int | None = None,
 ) -> dict[str, Any]:
-    """Bind one already-compiled persistent-agent score to live evidence."""
+    """Bind one already-compiled persistent-agent score to live evidence.
+
+    ``step_timeout_seconds`` (per-attempt limit of every LLM sheet, primary and
+    fallbacks) and ``idle_timeout_seconds`` (stale-detection window) are set
+    here, inside the binder, so the routing receipts and the recorded
+    ``execution_limits`` are generated from the final config. Callers must not
+    patch the bound YAML afterwards: that makes the receipts false.
+    """
+    for label, value in (
+        ("step timeout", step_timeout_seconds),
+        ("idle timeout", idle_timeout_seconds),
+    ):
+        if value is not None and not 0 < value <= MAX_TIMEOUT_SECONDS:
+            raise CapabilityResolutionError(
+                f"{label} must be a positive integer of at most "
+                f"{MAX_TIMEOUT_SECONDS} seconds, got {value}"
+            )
     workspace = run_workspace.expanduser().resolve()
     if workspace.is_symlink():
         raise CapabilityResolutionError(
@@ -216,7 +249,9 @@ def bind_score_to_capabilities(
         "defaults": {"phase_requirements": copy.deepcopy(requirements)},
         "agents": [{"name": str(contract.get("agent_id", ""))}],
     }
-    route_config = bind_config_to_capabilities(config, inventory, now=now)
+    route_config = bind_config_to_capabilities(
+        config, inventory, now=now, step_timeout_seconds=step_timeout_seconds,
+    )
     defaults = route_config["defaults"]
     if not isinstance(defaults, dict):  # bind_config_to_capabilities guarantees this
         raise CapabilityResolutionError("Bound compiler defaults must be a mapping")
@@ -247,6 +282,33 @@ def bind_score_to_capabilities(
         merged_config[phase] = {**prior, **route_config}
     sheet["per_sheet_instrument_config"] = merged_config
     sheet["per_sheet_fallbacks"] = resolved["per_sheet_fallbacks"]
+    if step_timeout_seconds is not None:
+        # Per-sheet config is merged over what the installed score carried, so an
+        # explicit limit wins; deterministic cli sheets are never touched.
+        for num, instrument_name in sheet["per_sheet_instruments"].items():
+            if instrument_name == "cli":
+                continue
+            current = merged_config.get(num, merged_config.get(str(num), {}))
+            merged_config[num] = {**current, "timeout_seconds": step_timeout_seconds}
+        sheet["per_sheet_instrument_config"] = merged_config
+    limits: dict[str, int] = {}
+    if step_timeout_seconds is not None:
+        limits["step_timeout_seconds"] = step_timeout_seconds
+    if idle_timeout_seconds is not None:
+        stale = bound.setdefault("stale_detection", {})
+        if not isinstance(stale, dict):
+            raise CapabilityResolutionError("Score stale_detection must be a mapping")
+        check_interval = float(stale.get("check_interval_seconds", 30.0))
+        if idle_timeout_seconds <= check_interval:
+            raise CapabilityResolutionError(
+                f"idle timeout ({idle_timeout_seconds}s) must exceed the score's "
+                f"stale-detection check interval ({check_interval:g}s)"
+            )
+        stale["enabled"] = True
+        stale["idle_timeout_seconds"] = idle_timeout_seconds
+        limits["idle_timeout_seconds"] = idle_timeout_seconds
+    if limits:
+        contract["execution_limits"] = limits
     contract["routing_receipts"] = defaults["routing_receipts"]
     contract["bound_at"] = _format_time((now or datetime.now(UTC)).astimezone(UTC))
     contract["run_workspace"] = str(workspace)

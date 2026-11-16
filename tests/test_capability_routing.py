@@ -614,3 +614,108 @@ def test_score_binding_rejects_workspace_with_prior_lifecycle_evidence(
             run_workspace=workspace,
             now=NOW,
         )
+
+
+def _timeout_score() -> dict[str, object]:
+    return {
+        "name": "targeted-work-canyon",
+        "instrument": "stale-unverified",
+        "instrument_fallbacks": [],
+        "sheet": {
+            "per_sheet_instruments": {},
+            "per_sheet_fallbacks": {},
+            "per_sheet_instrument_config": {4: {"timeout_seconds": 5}},
+        },
+        "stale_detection": {"enabled": True, "idle_timeout_seconds": 3600},
+        "prompt": {
+            "variables": {
+                "marianne_agent": {
+                    "schema_version": 1,
+                    "agent_id": "canyon",
+                    "score_shape": "targeted-work",
+                    "phase_requirements": {
+                        "work": {"required_capabilities": ["file_editing"]},
+                        "recon": {"required_capabilities": ["file_editing"]},
+                    },
+                    "routing_receipts": {},
+                }
+            }
+        },
+    }
+
+
+def _timeout_inventory() -> dict[str, object]:
+    return {
+        "profiles": [
+            _profile("primary", provider="openai", model="gpt-5.6-codex",
+                     capabilities=["file_editing"]),
+            _profile("backup", provider="anthropic", model="claude-opus-5-5",
+                     capabilities=["file_editing"], priority=200),
+        ]
+    }
+
+
+def test_step_timeout_is_bound_into_routes_and_receipts(tmp_path: Path) -> None:
+    bound = bind_score_to_capabilities(
+        _timeout_score(), _timeout_inventory(),
+        run_workspace=tmp_path / "ws", now=NOW, step_timeout_seconds=7200,
+    )
+    # Every alias (primary AND fallback) carries the limit: a fallback runs with
+    # its alias's config, not the sheet's.
+    aliases = bound["instruments"]
+    assert aliases and all(a["config"]["timeout_seconds"] == 7200 for a in aliases.values())
+    sheet_config = bound["sheet"]["per_sheet_instrument_config"]
+    assert sheet_config[3]["timeout_seconds"] == 7200
+    # The score's explicit deterministic-sheet limit is not an LLM step limit.
+    assert sheet_config[4] == {"timeout_seconds": 5}
+    contract = bound["prompt"]["variables"]["marianne_agent"]
+    assert contract["execution_limits"] == {"step_timeout_seconds": 7200}
+    for receipt in contract["routing_receipts"].values():
+        assert receipt["selected"]
+        assert all(item["timeout_seconds"] == 7200 for item in receipt["selected"])
+    # No instrument_config key that could flip an interactive seat is ever written.
+    assert "interactive" not in str(bound["instruments"])
+    assert "interactive" not in str(sheet_config)
+
+
+def test_idle_timeout_sets_stale_detection_and_is_recorded(tmp_path: Path) -> None:
+    bound = bind_score_to_capabilities(
+        _timeout_score(), _timeout_inventory(),
+        run_workspace=tmp_path / "ws", now=NOW, idle_timeout_seconds=5400,
+    )
+    assert bound["stale_detection"] == {"enabled": True, "idle_timeout_seconds": 5400}
+    contract = bound["prompt"]["variables"]["marianne_agent"]
+    assert contract["execution_limits"] == {"idle_timeout_seconds": 5400}
+    assert "timeout_seconds" not in bound["instruments"]["primary--gpt-5.6-codex"]["config"]
+
+
+def test_no_limits_requested_leaves_score_untouched(tmp_path: Path) -> None:
+    bound = bind_score_to_capabilities(
+        _timeout_score(), _timeout_inventory(), run_workspace=tmp_path / "ws", now=NOW,
+    )
+    contract = bound["prompt"]["variables"]["marianne_agent"]
+    assert "execution_limits" not in contract
+    assert bound["stale_detection"]["idle_timeout_seconds"] == 3600
+    assert all("timeout_seconds" not in a["config"] for a in bound["instruments"].values())
+    for receipt in contract["routing_receipts"].values():
+        assert all("timeout_seconds" not in item for item in receipt["selected"])
+
+
+@pytest.mark.parametrize("value", [0, -5, 14401])
+@pytest.mark.parametrize("kwarg", ["step_timeout_seconds", "idle_timeout_seconds"])
+def test_timeouts_outside_one_to_14400_are_refused(
+    tmp_path: Path, kwarg: str, value: int
+) -> None:
+    with pytest.raises(CapabilityResolutionError, match="14400"):
+        bind_score_to_capabilities(
+            _timeout_score(), _timeout_inventory(),
+            run_workspace=tmp_path / "ws", now=NOW, **{kwarg: value},
+        )
+
+
+def test_idle_timeout_must_exceed_check_interval(tmp_path: Path) -> None:
+    with pytest.raises(CapabilityResolutionError, match="check interval"):
+        bind_score_to_capabilities(
+            _timeout_score(), _timeout_inventory(),
+            run_workspace=tmp_path / "ws", now=NOW, idle_timeout_seconds=30,
+        )
