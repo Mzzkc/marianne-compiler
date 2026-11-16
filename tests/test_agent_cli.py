@@ -265,3 +265,78 @@ def test_engage_rejects_out_of_range_timeouts_before_writing(tmp_path: Path) -> 
         assert result.exit_code != 0
         assert "14400" in result.output
         assert not engagement.exists()
+
+
+def _write_debt(agents: Path, **fields: object) -> None:
+    meta = agents / "canyon" / ".marianne"
+    meta.mkdir(parents=True, exist_ok=True)
+    record = {
+        "schema_version": 1, "kind": "marianne-lifecycle-debt", "agent": "canyon",
+        "status": "pending", "source_engagement": "e3", **fields,
+    }
+    (meta / "pending-lifecycle-debt.yaml").write_text(yaml.safe_dump(record))
+
+
+def _targeted(tmp_path: Path):
+    agents, inventory = _installed_agent(tmp_path, "targeted-work")
+    return agents, lambda *extra: runner.invoke(app, [
+        "engage", "canyon", "--purpose", "job", "--inventory", str(inventory),
+        "--runs-dir", str(tmp_path / "runs"), "--agents-dir", str(agents),
+        "--date", "20261020", "--evidence-at", "2026-10-20T10:00:00Z",
+        "--shape", "targeted-work", "--defer-lifecycle", *extra,
+    ])
+
+
+def test_targeted_work_refused_at_three_pending_debts_unless_accepted(tmp_path: Path) -> None:
+    agents, run = _targeted(tmp_path)
+    _write_debt(agents, carried_pending_from=["e1", "e2"])
+    refused = run()
+    assert refused.exit_code != 0
+    assert "3 pending lifecycle debts" in refused.output
+    assert "--shape lifecycle-integration" in refused.output
+    assert "--accept-debt" in refused.output
+    assert not (tmp_path / "runs").exists()
+    accepted = run("--accept-debt")
+    assert accepted.exit_code == 0, accepted.output
+    assert "debt: 3 pending" in accepted.output
+
+
+def test_targeted_work_below_threshold_proceeds_and_debt_line_is_on_stdout(
+    tmp_path: Path,
+) -> None:
+    agents, run = _targeted(tmp_path)
+    _write_debt(agents, carried_pending_from=["e1"])
+    result = run()
+    assert result.exit_code == 0, result.output
+    stdout_only = runner.invoke(app, [
+        "engage", "canyon", "--purpose", "again", "--inventory",
+        str(tmp_path / "inventory.yaml"), "--runs-dir", str(tmp_path / "runs"),
+        "--agents-dir", str(agents), "--date", "20261020", "--shape", "targeted-work",
+        "--defer-lifecycle", "--evidence-at", "2026-10-20T10:00:00Z",
+    ])
+    assert "debt: 2 pending before this run" in stdout_only.stdout
+    assert "debt: 2 pending before this run" in stdout_only.stderr
+
+
+def test_debt_follows_archived_prior_records_and_ignores_integrated(tmp_path: Path) -> None:
+    agents, run = _targeted(tmp_path)
+    older = tmp_path / "older.yaml"
+    oldest = tmp_path / "oldest.yaml"
+    oldest.write_text(yaml.safe_dump({"status": "pending"}))
+    older.write_text(yaml.safe_dump({"status": "pending", "prior_debt_snapshot": str(oldest)}))
+    _write_debt(agents, prior_debt_snapshot={"path": str(older), "sha256": "x"})
+    refused = run()
+    assert refused.exit_code != 0 and "3 pending lifecycle debts" in refused.output
+    _write_debt(agents, status="integrated", carried_pending_from=["a", "b", "c"])
+    assert run().exit_code == 0
+
+
+def test_full_lifecycle_is_never_refused_for_debt(tmp_path: Path) -> None:
+    agents, inventory = _installed_agent(tmp_path, "full-lifecycle")
+    _write_debt(agents, carried_pending_from=["a", "b", "c", "d"])
+    result = runner.invoke(app, [
+        "engage", "canyon", "--purpose", "job", "--inventory", str(inventory),
+        "--runs-dir", str(tmp_path / "runs"), "--agents-dir", str(agents),
+        "--date", "20261020", "--evidence-at", "2026-10-20T10:00:00Z",
+    ])
+    assert result.exit_code == 0, result.output

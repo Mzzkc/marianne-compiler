@@ -216,6 +216,23 @@ def bind_score_routes_command(
 
 _DEFAULT_SHAPE = "full-lifecycle"
 _DEFERRING_SHAPE = "targeted-work"
+_DEBT_REFUSAL_THRESHOLD = 3
+
+# Debt records are agent-authored and their shape drifted: a record carries the
+# engagements it superseded under one of these keys (a list of engagement names,
+# or one snapshot/archive pointer to a prior record).
+_CARRIED_LIST_KEYS = ("carried_pending_from",)
+_CARRIED_SINGLE_KEYS = (
+    "carried_prior_debt",
+    "prior_debt",
+    "prior_debt_snapshot",
+    "prior_debt_path",
+    "prior_debt_archive",
+    "prior_lifecycle_debt",
+    "prior_lifecycle_debt_snapshot",
+    "prior_pending_debt_snapshot",
+    "prior_record_snapshot",
+)
 
 
 @app.command("engage")
@@ -241,6 +258,12 @@ def engage_command(
         help="Required with --shape targeted-work: acknowledges that consolidate, "
         "reflect, maturity and resurrect become pending debt a lifecycle-integration "
         "engagement must pay back.",
+    ),
+    accept_debt: bool = typer.Option(
+        False, "--accept-debt",
+        help="Proceed with --shape targeted-work although the agent already has "
+        f"{_DEBT_REFUSAL_THRESHOLD}+ pending lifecycle debts. Debt compounds: pay it "
+        "with a lifecycle-integration engagement first unless you can say why not.",
     ),
     task: Path | None = typer.Option(
         None, "--task", "-t",
@@ -299,6 +322,19 @@ def engage_command(
             f"no installed {shape} score for agent {agent_id!r} at {installed}; "
             "run marianne-agents install-package first"
         )
+    debt_count, debt_note = _pending_debt(agents_dir, agent_id)
+    if shape == _DEFERRING_SHAPE and debt_count >= _DEBT_REFUSAL_THRESHOLD and not accept_debt:
+        _echo_both(
+            f"debt: REFUSED, {agent_id} already has {debt_count} pending lifecycle "
+            f"debts{debt_note}"
+        )
+        raise typer.BadParameter(
+            f"{agent_id} already has {debt_count} pending lifecycle debts{debt_note}; "
+            "targeted-work would add another. Pay them first with: marianne-agents "
+            f"engage {agent_id} --shape lifecycle-integration --purpose <slug> "
+            "--inventory <inventory> --runs-dir <runs-dir>. Pass --accept-debt to "
+            "defer again anyway."
+        )
     stamp = date or datetime.now(UTC).strftime("%Y%m%d")
     engagement = f"{agent_id}-{slug}-{stamp}"
     job_name = f"{shape}-{engagement}"
@@ -336,11 +372,91 @@ def engage_command(
     typer.echo(f"workspace: {run_workspace}")
     typer.echo(f"installed: {installed}")
     if shape == _DEFERRING_SHAPE:
-        typer.echo(
-            "debt: targeted-work leaves lifecycle debt; engage "
-            f"{agent_id} with --shape lifecycle-integration afterwards", err=True,
+        # Conductors pipe stderr away, so the debt line is on both streams.
+        _echo_both(
+            f"debt: {debt_count} pending before this run{debt_note}; targeted-work "
+            f"leaves more. Engage {agent_id} with --shape lifecycle-integration "
+            "afterwards"
         )
+    elif debt_count:
+        typer.echo(f"debt: {debt_count} pending{debt_note}")
     typer.echo(f"run: mzt run {output}")
+
+
+def _echo_both(message: str) -> None:
+    typer.echo(message)
+    typer.echo(message, err=True)
+
+
+def _pending_debt(agents_dir: Path, agent_id: str) -> tuple[int, str]:
+    """Count the agent's pending lifecycle debts: (count, human note).
+
+    The current record counts as one when its status is pending. Every
+    engagement it names under ``carried_pending_from`` and every archived prior
+    record it points at (followed while the snapshot exists on disk, cycle
+    guarded) adds one. A record that cannot be read counts as the threshold:
+    fail closed rather than hide debt.
+    """
+    path = (
+        agents_dir.expanduser().resolve() / agent_id / ".marianne"
+        / "pending-lifecycle-debt.yaml"
+    )
+    if not path.is_file():
+        return 0, ""
+    record = _read_debt(path)
+    if record is None:
+        return _DEBT_REFUSAL_THRESHOLD, f" (debt record {path} is unreadable; counted conservatively)"
+    if str(record.get("status", "")).strip().lower() != "pending":
+        return 0, ""
+    count = 1
+    seen: set[Path] = {path}
+    queue = [record]
+    while queue:
+        current = queue.pop()
+        for key in _CARRIED_LIST_KEYS:
+            if isinstance(current.get(key), list):
+                count += len(current[key])
+        for key in _CARRIED_SINGLE_KEYS:
+            embedded = current.get(key)
+            if (
+                isinstance(embedded, dict)
+                and str(embedded.get("status", "")).lower() == "pending"
+            ):
+                count += 1  # prior record preserved verbatim inside this one
+                queue.append(embedded)
+                break
+            target = _debt_pointer(embedded)
+            if target is None:
+                continue
+            if target in seen or not target.is_file():
+                if target not in seen and current.get(key):
+                    count += 1  # named but archived off-box: still one prior debt
+                    seen.add(target)
+                continue
+            seen.add(target)
+            prior = _read_debt(target)
+            if prior is None or str(prior.get("status", "pending")).lower() != "pending":
+                continue
+            count += 1
+            queue.append(prior)
+            break
+    return count, f" (counted from {path}, following archived prior records)"
+
+
+def _read_debt(path: Path) -> dict[str, Any] | None:
+    try:
+        value = yaml.safe_load(path.read_text())
+    except (OSError, yaml.YAMLError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _debt_pointer(value: Any) -> Path | None:
+    if isinstance(value, dict):
+        value = value.get("path") or value.get("archive")
+    if isinstance(value, str) and value.strip():
+        return Path(value.strip()).expanduser()
+    return None
 
 
 def _check_task_file(task: Path) -> Path:
