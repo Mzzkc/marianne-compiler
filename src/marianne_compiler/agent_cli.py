@@ -26,6 +26,7 @@ from marianne_compiler.capabilities import (
 )
 from marianne_compiler.identity import DEFAULT_AGENTS_DIR, IdentitySeeder
 from marianne_compiler.memory_census import census_agent_memory
+from marianne_compiler.portable_paths import portabilize_score
 
 app = typer.Typer(
     name="marianne-agents",
@@ -211,6 +212,17 @@ def bind_score_routes_command(
         run_workspace=run_workspace,
         now=now,
     )
+    identity_dir = (
+        bound.get("prompt", {}).get("variables", {}).get("agent_identity_dir")
+        if isinstance(bound.get("prompt"), dict)
+        else None
+    )
+    if isinstance(identity_dir, str) and identity_dir.strip():
+        bound, path_warnings = portabilize_score(
+            bound, Path(identity_dir).expanduser().parent
+        )
+        for warning in path_warnings:
+            _echo_both(f"WARNING: {warning}")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(yaml.safe_dump(bound, sort_keys=False, allow_unicode=True))
     typer.echo(str(output))
@@ -362,6 +374,9 @@ def engage_command(
         step_timeout_seconds=step_timeout, idle_timeout_seconds=idle_timeout,
     )
     bound["name"] = job_name
+    bound, path_warnings = portabilize_score(bound, agents_dir)
+    for warning in path_warnings:
+        _echo_both(f"WARNING: {warning}")
     run_dir.mkdir(parents=True, exist_ok=True)
     task_line = None
     if task_source is not None:

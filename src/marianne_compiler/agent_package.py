@@ -16,6 +16,7 @@ import yaml
 
 from marianne_compiler.identity import IdentitySeeder, validate_agent_id
 from marianne_compiler.pipeline import CompilationPipeline
+from marianne_compiler.portable_paths import portabilize_score
 
 SCORE_SHAPES = ("full-lifecycle", "targeted-work", "lifecycle-integration")
 AssetSource: TypeAlias = Path | bytes
@@ -189,6 +190,7 @@ def install_agent_package(
         roster.get("technique_runtime_root", "~/.marianne/techniques")
     )
     prepared_agents: list[tuple[str, dict[str, Any], dict[str, AssetSource]]] = []
+    install_warnings: list[str] = []
     seen_agent_ids: set[str] = set()
     for roster_agent in roster["agents"]:
         if not isinstance(roster_agent, dict) or not roster_agent.get("id"):
@@ -239,6 +241,10 @@ def install_agent_package(
                 package_techniques_root: str(techniques_dir),
             }
             localized = _localize_score(score, replacements)
+            # Installed scores are agent data that travels with the agent
+            # directory: write home-relative paths, not this machine's layout.
+            localized, path_warnings = portabilize_score(localized, agents_dir)
+            install_warnings.extend(f"{agent_name}: {w}" for w in path_warnings)
             asset_sources[relative.as_posix()] = _yaml_bytes(localized)
         expected_scores = {f"scores/{shape}.yaml" for shape in SCORE_SHAPES}
         if not expected_scores.issubset(asset_sources):
@@ -302,6 +308,7 @@ def install_agent_package(
         "status": "dry_run" if dry_run else "installed",
         "actions": actions,
         "conflicts": conflicts,
+        **({"warnings": sorted(set(install_warnings))} if install_warnings else {}),
     }
 
 

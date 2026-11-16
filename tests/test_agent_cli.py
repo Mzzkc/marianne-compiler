@@ -346,7 +346,10 @@ def test_full_lifecycle_is_never_refused_for_debt(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
 
 
-def test_engage_prints_real_workspace_path_and_filesystem(tmp_path: Path) -> None:
+def test_engage_prints_real_workspace_path_and_filesystem(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
     result, engagement, _out = _engage(tmp_path)
     assert result.exit_code == 0, result.output
     line = next(ln for ln in result.output.splitlines() if ln.startswith("workspace: "))
@@ -358,6 +361,8 @@ def test_engage_warns_when_symlinked_workspace_lands_on_another_filesystem(
     tmp_path: Path, monkeypatch,
 ) -> None:
     import marianne_compiler.agent_cli as cli
+
+    monkeypatch.setenv("HOME", str(tmp_path))
 
     agents, inventory = _installed_agent(tmp_path, "full-lifecycle")
     elsewhere = tmp_path / "elsewhere"
