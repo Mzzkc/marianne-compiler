@@ -202,8 +202,13 @@ def bind_score_to_capabilities(
     now: datetime | None = None,
     step_timeout_seconds: int | None = None,
     idle_timeout_seconds: int | None = None,
+    active_cadenza_max_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Bind one already-compiled persistent-agent score to live evidence.
+
+    ``active_cadenza_max_bytes`` sets ``max_bytes`` on every injection item that
+    attaches the personal active cadenza, so the conductor fails the sheet
+    before execution (required items) instead of shipping an over-sized prompt.
 
     ``step_timeout_seconds`` (per-attempt limit of every LLM sheet, primary and
     fallbacks) and ``idle_timeout_seconds`` (stale-detection window) are set
@@ -211,6 +216,10 @@ def bind_score_to_capabilities(
     ``execution_limits`` are generated from the final config. Callers must not
     patch the bound YAML afterwards: that makes the receipts false.
     """
+    if active_cadenza_max_bytes is not None and active_cadenza_max_bytes <= 0:
+        raise CapabilityResolutionError(
+            f"active cadenza max bytes must be positive, got {active_cadenza_max_bytes}"
+        )
     for label, value in (
         ("step timeout", step_timeout_seconds),
         ("idle timeout", idle_timeout_seconds),
@@ -309,6 +318,15 @@ def bind_score_to_capabilities(
         limits["idle_timeout_seconds"] = idle_timeout_seconds
     if limits:
         contract["execution_limits"] = limits
+    if active_cadenza_max_bytes is not None:
+        capped = _cap_active_cadenza(sheet, active_cadenza_max_bytes)
+        if not capped:
+            raise CapabilityResolutionError(
+                "--active-max-bytes was given but the score attaches no personal "
+                "active cadenza (a directory ending cadenzas/personal/active)"
+            )
+        limits["active_cadenza_max_bytes"] = active_cadenza_max_bytes
+        contract["execution_limits"] = limits
     contract["routing_receipts"] = defaults["routing_receipts"]
     contract["bound_at"] = _format_time((now or datetime.now(UTC)).astimezone(UTC))
     contract["run_workspace"] = str(workspace)
@@ -317,6 +335,27 @@ def bind_score_to_capabilities(
     bound = _localize_home_paths(bound)
     _bind_personal_cadenza_prompt_extensions(bound)
     return bound
+
+
+def _cap_active_cadenza(sheet: dict[str, Any], max_bytes: int) -> int:
+    """Set ``max_bytes`` on each personal-active-cadenza directory item; count them."""
+    count = 0
+    cadenzas = sheet.get("cadenzas")
+    groups = list(cadenzas.values()) if isinstance(cadenzas, dict) else []
+    prelude = sheet.get("prelude")
+    if isinstance(prelude, list):
+        groups.append(prelude)
+    for items in groups:
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            directory = item.get("directory") if isinstance(item, dict) else None
+            if isinstance(directory, str) and directory.rstrip("/").endswith(
+                "cadenzas/personal/active"
+            ):
+                item["max_bytes"] = max_bytes
+                count += 1
+    return count
 
 
 def _bind_personal_cadenza_prompt_extensions(score: dict[str, Any]) -> None:

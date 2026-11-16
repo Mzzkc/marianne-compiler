@@ -299,6 +299,12 @@ def engage_command(
         help="Seconds without workspace output before stale detection fails a "
         f"sheet; 1..{MAX_TIMEOUT_SECONDS}. Enables stale_detection.",
     ),
+    active_max_bytes: int | None = typer.Option(
+        None, "--active-max-bytes",
+        help="Set max_bytes on the personal active-cadenza injection items in the "
+        "bound score; the conductor then fails a required item over the cap before "
+        "execution instead of shipping an over-sized prompt. Unset = no cap.",
+    ),
     workspaces_dir: Path | None = typer.Option(
         None, "--workspaces-dir", "-w",
         help="Root for the fresh engagement workspace; defaults to --runs-dir.",
@@ -361,6 +367,8 @@ def engage_command(
             f"engagement already bound: {output}. One engagement is one directory; "
             "pick another --purpose or resume the existing job with mzt resume."
         )
+    if active_max_bytes is not None and active_max_bytes <= 0:
+        raise typer.BadParameter("--active-max-bytes must be a positive integer")
     for flag, value in (("--step-timeout", step_timeout), ("--idle-timeout", idle_timeout)):
         if value is not None and not 0 < value <= MAX_TIMEOUT_SECONDS:
             raise typer.BadParameter(
@@ -373,6 +381,7 @@ def engage_command(
     bound = bind_score_to_capabilities(
         score_data, inventory_data, run_workspace=run_workspace, now=now,
         step_timeout_seconds=step_timeout, idle_timeout_seconds=idle_timeout,
+        active_cadenza_max_bytes=active_max_bytes,
     )
     bound["name"] = job_name
     bound, path_warnings = portabilize_score(bound, agents_dir)

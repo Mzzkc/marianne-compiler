@@ -520,3 +520,55 @@ def test_cadenza_rejects_unknown_action_agent_and_missing_dir(tmp_path: Path) ->
     assert runner.invoke(
         app, ["cadenza", "../x", "list", "--agents-dir", str(agents)]
     ).exit_code != 0
+
+
+def _installed_with_active(tmp_path: Path) -> tuple[Path, Path]:
+    agents, inventory = _installed_agent(tmp_path, "full-lifecycle")
+    path = agents / "canyon" / "scores" / "full-lifecycle.yaml"
+    score = yaml.safe_load(path.read_text())
+    active = str(agents / "canyon" / "cadenzas" / "personal" / "active")
+    score["sheet"]["cadenzas"] = {
+        1: [
+            {"file": str(agents / "canyon" / "recent.md"), "as": "context", "required": True},
+            {"directory": active, "as": "context", "required": True},
+        ]
+    }
+    path.write_text(yaml.safe_dump(score, sort_keys=False))
+    return agents, inventory
+
+
+def test_engage_active_max_bytes_caps_only_the_active_cadenza(tmp_path: Path) -> None:
+    agents, inventory = _installed_with_active(tmp_path)
+    runs = tmp_path / "runs"
+    args = [
+        "engage", "canyon", "--purpose", "job", "--inventory", str(inventory),
+        "--runs-dir", str(runs), "--agents-dir", str(agents), "--date", "20261020",
+        "--evidence-at", "2026-10-20T10:00:00Z",
+    ]
+    capped = runner.invoke(app, [*args, "--active-max-bytes", "20000"])
+    assert capped.exit_code == 0, capped.output
+    out = runs / "canyon-job-20261020" / "full-lifecycle-canyon-job-20261020.yaml"
+    bound = yaml.safe_load(out.read_text())
+    file_item, dir_item = bound["sheet"]["cadenzas"][1]
+    assert dir_item["max_bytes"] == 20000 and "max_bytes" not in file_item
+    limits = bound["prompt"]["variables"]["marianne_agent"]["execution_limits"]
+    assert limits == {"active_cadenza_max_bytes": 20000}
+    # Default: no behaviour change.
+    plain = runner.invoke(app, [*args, "--purpose", "plain"])
+    assert plain.exit_code == 0, plain.output
+    unbound = yaml.safe_load(
+        (runs / "canyon-plain-20261020" / "full-lifecycle-canyon-plain-20261020.yaml").read_text()
+    )
+    assert all("max_bytes" not in item for item in unbound["sheet"]["cadenzas"][1])
+    assert "execution_limits" not in unbound["prompt"]["variables"]["marianne_agent"]
+
+
+def test_engage_active_max_bytes_rejects_bad_values_and_scores_without_active(
+    tmp_path: Path,
+) -> None:
+    result, engagement, _out = _engage(tmp_path, "full-lifecycle", "--active-max-bytes", "0")
+    assert result.exit_code != 0 and not engagement.exists()
+    other = tmp_path / "other"
+    other.mkdir()
+    result, _eng, _o = _engage(other, "full-lifecycle", "--active-max-bytes", "100")
+    assert result.exit_code != 0  # fixture score attaches no active cadenza
