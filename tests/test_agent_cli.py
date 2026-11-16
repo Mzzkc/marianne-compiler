@@ -163,6 +163,7 @@ def test_engage_targeted_work_needs_explicit_deferral(tmp_path: Path) -> None:
     base = [
         "engage", "canyon", "--purpose", "fix", "--inventory", str(inventory),
         "--runs-dir", str(runs), "--agents-dir", str(agents), "--shape", "targeted-work",
+        "--evidence-at", "2026-10-20T10:00:00Z",
     ]
     refused = runner.invoke(app, base)
     assert refused.exit_code != 0
@@ -181,3 +182,61 @@ def test_engage_default_shape_is_full_lifecycle_and_missing_score_is_named(tmp_p
     ])
     assert result.exit_code != 0
     assert "full-lifecycle" in result.output and "install-package" in result.output
+
+
+def _engage(tmp_path: Path, shape: str = "full-lifecycle", *extra: str):
+    agents, inventory = _installed_agent(tmp_path, shape)
+    runs = tmp_path / "runs"
+    args = [
+        "engage", "canyon", "--purpose", "job", "--inventory", str(inventory),
+        "--runs-dir", str(runs), "--agents-dir", str(agents), "--date", "20261020",
+        "--evidence-at", "2026-10-20T10:00:00Z", "--shape", shape, *extra,
+    ]
+    if shape == "targeted-work" and "--defer-lifecycle" not in extra:
+        args.append("--defer-lifecycle")
+    result = runner.invoke(app, args)
+    engagement = runs / "canyon-job-20261020"
+    out = engagement / f"{shape}-canyon-job-20261020.yaml"
+    return result, engagement, out
+
+
+def test_engage_task_is_copied_immutably_and_injected_as_required_prelude(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    import os
+    import stat
+
+    task = tmp_path / "brief.md"
+    task.write_text("Fix the flaky test.\n")
+    digest = hashlib.sha256(task.read_bytes()).hexdigest()
+    result, engagement, out = _engage(tmp_path, "full-lifecycle", "--task", str(task))
+    assert result.exit_code == 0, result.output
+    assert f"task: {task.resolve()} sha256:{digest[:16]}" in result.output
+    copy = engagement / "task-brief.md"
+    assert copy.read_text() == "Fix the flaky test.\n"
+    assert not os.access(copy, os.W_OK) or stat.S_IMODE(copy.stat().st_mode) == 0o444
+    assert stat.S_IMODE(copy.stat().st_mode) == 0o444
+    bound = yaml.safe_load(out.read_text())
+    assert {"file": str(copy), "as": "context", "required": True} in bound["sheet"]["prelude"]
+    receipt = bound["prompt"]["variables"]["marianne_agent"]["task"]
+    assert receipt["sha256"] == f"sha256:{digest}"
+    # Editing the source afterwards cannot change what the engagement reads.
+    task.write_text("changed")
+    assert copy.read_text() == "Fix the flaky test.\n"
+
+
+def test_engage_task_is_optional_and_missing_task_is_refused(tmp_path: Path) -> None:
+    result, engagement, out = _engage(tmp_path)
+    assert result.exit_code == 0, result.output
+    bound = yaml.safe_load(out.read_text())
+    assert "task" not in bound["prompt"]["variables"]["marianne_agent"]
+    assert "task:" not in result.output
+    assert not list(engagement.glob("task-*"))
+
+    other = tmp_path / "other"
+    other.mkdir()
+    missing = _engage(other, "full-lifecycle", "--task", str(other / "nope.md"))[0]
+    assert missing.exit_code != 0
+    assert "--task" in missing.output
+    assert not (other / "runs").exists()

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -238,6 +241,13 @@ def engage_command(
         "reflect, maturity and resurrect become pending debt a lifecycle-integration "
         "engagement must pay back.",
     ),
+    task: Path | None = typer.Option(
+        None, "--task", "-t",
+        help="Task file for this engagement. It is copied (read-only) into the "
+        "engagement run directory and injected as a REQUIRED prelude item reaching "
+        "every sheet; its sha256 is recorded in the bound score's marianne_agent "
+        "contract. Prefer this over appending to an agent's cadenza files.",
+    ),
     workspaces_dir: Path | None = typer.Option(
         None, "--workspaces-dir", "-w",
         help="Root for the fresh engagement workspace; defaults to --runs-dir.",
@@ -287,6 +297,7 @@ def engage_command(
             f"engagement already bound: {output}. One engagement is one directory; "
             "pick another --purpose or resume the existing job with mzt resume."
         )
+    task_source = _check_task_file(task) if task is not None else None
     score_data = _load_mapping(installed, "score")
     inventory_data = _load_mapping(inventory, "inventory")
     now = _parse_time(evidence_at) if evidence_at else datetime.now(UTC)
@@ -295,8 +306,13 @@ def engage_command(
     )
     bound["name"] = job_name
     run_dir.mkdir(parents=True, exist_ok=True)
+    task_line = None
+    if task_source is not None:
+        task_line = _attach_task(bound, task_source, run_dir)
     output.write_text(yaml.safe_dump(bound, sort_keys=False, allow_unicode=True))
     typer.echo(f"job: {job_name}")
+    if task_line:
+        typer.echo(task_line)
     typer.echo(f"score: {output}")
     typer.echo(f"workspace: {run_workspace}")
     typer.echo(f"installed: {installed}")
@@ -306,6 +322,41 @@ def engage_command(
             f"{agent_id} with --shape lifecycle-integration afterwards", err=True,
         )
     typer.echo(f"run: mzt run {output}")
+
+
+def _check_task_file(task: Path) -> Path:
+    source = task.expanduser().resolve()
+    if not source.is_file():
+        raise typer.BadParameter(f"--task {task} is not a readable file")
+    if source.stat().st_size == 0:
+        raise typer.BadParameter(f"--task {task} is empty")
+    return source
+
+
+def _attach_task(bound: dict[str, Any], source: Path, run_dir: Path) -> str:
+    """Copy the task into the run dir (read-only) and inject it into every sheet.
+
+    The copy, not the source, is what the sheets read, so later edits to the
+    source cannot change what a running engagement was told. The sha256 goes
+    into the marianne_agent contract, which already carries bind provenance.
+    """
+    data = source.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    copy = run_dir / f"task-{source.name}"
+    copy.write_bytes(data)
+    os.chmod(copy, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+    sheet = bound.setdefault("sheet", {})
+    prelude = sheet.setdefault("prelude", [])
+    if not isinstance(prelude, list):
+        raise typer.BadParameter("score sheet.prelude must be a list to attach --task")
+    prelude.append({"file": str(copy), "as": "context", "required": True})
+    contract = bound["prompt"]["variables"]["marianne_agent"]
+    contract["task"] = {
+        "source": str(source),
+        "copy": str(copy),
+        "sha256": f"sha256:{digest}",
+    }
+    return f"task: {source} sha256:{digest[:16]}"
 
 
 def _load_mapping(path: Path, label: str) -> dict[str, Any]:
