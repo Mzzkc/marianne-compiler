@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import stat
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -233,6 +234,7 @@ def bind_score_routes_command(
 _DEFAULT_SHAPE = "full-lifecycle"
 _DEFERRING_SHAPE = "targeted-work"
 _DEBT_REFUSAL_THRESHOLD = 3
+DEBT_REFUSAL_THRESHOLD = _DEBT_REFUSAL_THRESHOLD
 
 # Debt records are agent-authored and their shape drifted: a record carries the
 # engagements it superseded under one of these keys (a list of engagement names,
@@ -330,12 +332,120 @@ def engage_command(
     fresh workspace are derived from AGENT, --shape, --purpose and today's date,
     so every engagement is one command and nothing is hand-copied or hand-named.
     """
+    try:
+        engagement = bind_engagement(
+            agent, purpose=purpose, inventory=inventory, runs_dir=runs_dir, shape=shape,
+            defer_lifecycle=defer_lifecycle, accept_debt=accept_debt, task=task,
+            step_timeout=step_timeout, idle_timeout=idle_timeout,
+            active_max_bytes=active_max_bytes, phase_class=phase_class,
+            workspaces_dir=workspaces_dir, agents_dir=agents_dir, date=date,
+            evidence_at=evidence_at,
+        )
+    except EngageRefusal as exc:
+        if exc.echo:
+            _echo_both(exc.echo)
+        raise typer.BadParameter(str(exc)) from exc
+    for warning in engagement.path_warnings:
+        _echo_both(f"WARNING: {warning}")
+    typer.echo(f"job: {engagement.job_name}")
+    if engagement.task_line:
+        typer.echo(engagement.task_line)
+    typer.echo(f"score: {engagement.score_path}")
+    for line in _workspace_lines(
+        engagement.workspaces_root, engagement.engagement, engagement.workspace,
+        engagement.run_dir,
+    ):
+        typer.echo(line)
+    typer.echo(f"installed: {engagement.installed}")
+    if engagement.phase_classes:
+        typer.echo("classes: " + ", ".join(
+            f"{p}={c}" for p, c in sorted(engagement.phase_classes.items())
+        ) + " (chains resolve at submit; mzt validate shows them)")
+    if shape == _DEFERRING_SHAPE:
+        # Conductors pipe stderr away, so the debt line is on both streams.
+        _echo_both(
+            f"debt: {engagement.debt_count} pending before this run{engagement.debt_note}; "
+            f"targeted-work leaves more. Engage {engagement.agent_id} with --shape "
+            "lifecycle-integration afterwards"
+        )
+    elif engagement.debt_count:
+        typer.echo(f"debt: {engagement.debt_count} pending{engagement.debt_note}")
+    typer.echo(f"run: mzt run {engagement.score_path}")
+
+
+class EngageRefusal(Exception):  # noqa: N818 - a refusal, not an error
+    """:func:`bind_engagement` refused. ``kind`` is ``usage`` or ``debt``.
+
+    ``echo`` is a line the command prints on both streams before it fails
+    (the debt refusal, which conductors must see on stderr too).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str = "usage",
+        echo: str | None = None,
+        debt_count: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.echo = echo
+        self.debt_count = debt_count
+
+
+@dataclass(frozen=True)
+class Engagement:
+    """One bound engagement: everything :func:`bind_engagement` wrote or resolved."""
+
+    agent_id: str
+    shape: str
+    engagement: str
+    job_name: str
+    run_dir: Path
+    score_path: Path
+    workspace: Path
+    workspaces_root: Path
+    installed: Path
+    task_line: str | None
+    phase_classes: dict[str, str]
+    debt_count: int
+    debt_note: str
+    path_warnings: list[str] = field(default_factory=list)
+
+
+def bind_engagement(
+    agent: str,
+    *,
+    purpose: str,
+    inventory: Path,
+    runs_dir: Path,
+    shape: str = _DEFAULT_SHAPE,
+    defer_lifecycle: bool = False,
+    accept_debt: bool = False,
+    task: Path | None = None,
+    step_timeout: int | None = None,
+    idle_timeout: int | None = None,
+    active_max_bytes: int | None = None,
+    phase_class: list[str] | None = None,
+    workspaces_dir: Path | None = None,
+    agents_dir: Path = DEFAULT_AGENTS_DIR,
+    date: str | None = None,
+    evidence_at: str | None = None,
+) -> Engagement:
+    """Bind, name and workspace one engagement; the body of ``engage``.
+
+    Writes only under ``runs_dir`` (the bound score and the read-only task copy)
+    (``workspaces_dir`` is only named, never created). Never writes to the
+    agent's home. Raises :class:`EngageRefusal` for every refusal ``engage``
+    reports as a usage error; the debt refusal has ``kind == "debt"``.
+    """
     if shape not in SCORE_SHAPES:
-        raise typer.BadParameter(
+        raise EngageRefusal(
             f"--shape must be one of: {', '.join(SCORE_SHAPES)}"
         )
     if shape == _DEFERRING_SHAPE and not defer_lifecycle:
-        raise typer.BadParameter(
+        raise EngageRefusal(
             "targeted-work defers consolidate, reflect, maturity and resurrect into "
             "pending lifecycle debt. Pass --defer-lifecycle to confirm, and plan the "
             "lifecycle-integration engagement that pays it back; otherwise use the "
@@ -343,26 +453,28 @@ def engage_command(
         )
     slug = purpose.strip().lower()
     if not slug or not all(ch.isalnum() or ch == "-" for ch in slug):
-        raise typer.BadParameter("--purpose must be a slug of letters, digits and '-'")
+        raise EngageRefusal("--purpose must be a slug of letters, digits and '-'")
     agent_id = agent.strip()
     installed = agents_dir.expanduser().resolve() / agent_id / "scores" / f"{shape}.yaml"
     if not installed.is_file():
-        raise typer.BadParameter(
+        raise EngageRefusal(
             f"no installed {shape} score for agent {agent_id!r} at {installed}; "
             "run marianne-agents install-package first"
         )
     debt_count, debt_note = _pending_debt(agents_dir, agent_id)
     if shape == _DEFERRING_SHAPE and debt_count >= _DEBT_REFUSAL_THRESHOLD and not accept_debt:
-        _echo_both(
-            f"debt: REFUSED, {agent_id} already has {debt_count} pending lifecycle "
-            f"debts{debt_note}"
-        )
-        raise typer.BadParameter(
+        raise EngageRefusal(
             f"{agent_id} already has {debt_count} pending lifecycle debts{debt_note}; "
             "targeted-work would add another. Pay them first with: marianne-agents "
             f"engage {agent_id} --shape lifecycle-integration --purpose <slug> "
             "--inventory <inventory> --runs-dir <runs-dir>. Pass --accept-debt to "
-            "defer again anyway."
+            "defer again anyway.",
+            kind="debt",
+            debt_count=debt_count,
+            echo=(
+                f"debt: REFUSED, {agent_id} already has {debt_count} pending lifecycle "
+                f"debts{debt_note}"
+            ),
         )
     stamp = date or datetime.now(UTC).strftime("%Y%m%d")
     engagement = f"{agent_id}-{slug}-{stamp}"
@@ -371,29 +483,32 @@ def engage_command(
     output = run_dir / f"{job_name}.yaml"
     run_workspace = (workspaces_dir or runs_dir).expanduser().resolve() / engagement
     if output.exists():
-        raise typer.BadParameter(
+        raise EngageRefusal(
             f"engagement already bound: {output}. One engagement is one directory; "
             "pick another --purpose or resume the existing job with mzt resume."
         )
     if active_max_bytes is not None and active_max_bytes <= 0:
-        raise typer.BadParameter("--active-max-bytes must be a positive integer")
+        raise EngageRefusal("--active-max-bytes must be a positive integer")
     for flag, value in (("--step-timeout", step_timeout), ("--idle-timeout", idle_timeout)):
         if value is not None and not 0 < value <= MAX_TIMEOUT_SECONDS:
-            raise typer.BadParameter(
+            raise EngageRefusal(
                 f"{flag} must be a positive integer of at most {MAX_TIMEOUT_SECONDS}"
             )
     phase_classes: dict[str, str] = {}
-    for item in phase_class:
+    for item in phase_class or []:
         phase_name, sep, class_name = item.partition("=")
         phase_name, class_name = phase_name.strip(), class_name.strip()
         if not sep or not phase_name or not class_name:
-            raise typer.BadParameter(f"--class takes PHASE=CLASS, got {item!r}")
+            raise EngageRefusal(f"--class takes PHASE=CLASS, got {item!r}")
         if phase_name in phase_classes:
-            raise typer.BadParameter(f"--class names phase {phase_name!r} twice")
+            raise EngageRefusal(f"--class names phase {phase_name!r} twice")
         phase_classes[phase_name] = class_name
-    task_source = _check_task_file(task) if task is not None else None
-    score_data = _load_mapping(installed, "score")
-    inventory_data = _load_mapping(inventory, "inventory")
+    try:
+        task_source = _check_task_file(task) if task is not None else None
+        score_data = _load_mapping(installed, "score")
+        inventory_data = _load_mapping(inventory, "inventory")
+    except typer.BadParameter as exc:
+        raise EngageRefusal(exc.message) from exc
     now = _parse_time(evidence_at) if evidence_at else datetime.now(UTC)
     try:
         bound = bind_score_to_capabilities(
@@ -403,39 +518,25 @@ def engage_command(
         )
     except CapabilityResolutionError as exc:
         if phase_classes and "--class" in str(exc):
-            raise typer.BadParameter(str(exc)) from exc
+            raise EngageRefusal(str(exc)) from exc
         raise
     bound["name"] = job_name
     bound, path_warnings = portabilize_score(bound, agents_dir)
-    for warning in path_warnings:
-        _echo_both(f"WARNING: {warning}")
     run_dir.mkdir(parents=True, exist_ok=True)
     task_line = None
     if task_source is not None:
-        task_line = _attach_task(bound, task_source, run_dir)
+        try:
+            task_line = _attach_task(bound, task_source, run_dir)
+        except typer.BadParameter as exc:
+            raise EngageRefusal(exc.message) from exc
     output.write_text(yaml.safe_dump(bound, sort_keys=False, allow_unicode=True))
-    typer.echo(f"job: {job_name}")
-    if task_line:
-        typer.echo(task_line)
-    typer.echo(f"score: {output}")
-    for line in _workspace_lines(
-        (workspaces_dir or runs_dir), engagement, run_workspace, run_dir,
-    ):
-        typer.echo(line)
-    typer.echo(f"installed: {installed}")
-    if phase_classes:
-        typer.echo("classes: " + ", ".join(f"{p}={c}" for p, c in sorted(phase_classes.items()))
-                   + " (chains resolve at submit; mzt validate shows them)")
-    if shape == _DEFERRING_SHAPE:
-        # Conductors pipe stderr away, so the debt line is on both streams.
-        _echo_both(
-            f"debt: {debt_count} pending before this run{debt_note}; targeted-work "
-            f"leaves more. Engage {agent_id} with --shape lifecycle-integration "
-            "afterwards"
-        )
-    elif debt_count:
-        typer.echo(f"debt: {debt_count} pending{debt_note}")
-    typer.echo(f"run: mzt run {output}")
+    return Engagement(
+        agent_id=agent_id, shape=shape, engagement=engagement, job_name=job_name,
+        run_dir=run_dir, score_path=output, workspace=run_workspace,
+        workspaces_root=workspaces_dir or runs_dir, installed=installed,
+        task_line=task_line, phase_classes=phase_classes, debt_count=debt_count,
+        debt_note=debt_note, path_warnings=list(path_warnings),
+    )
 
 
 _STOCK_ACTIVE = frozenset({
@@ -621,6 +722,11 @@ def _workspace_lines(
 def _echo_both(message: str) -> None:
     typer.echo(message)
     typer.echo(message, err=True)
+
+
+def pending_debt(agents_dir: Path, agent_id: str) -> tuple[int, str]:
+    """Public name for the pending-debt counter ``engage`` uses (read-only)."""
+    return _pending_debt(agents_dir, agent_id)
 
 
 def _pending_debt(agents_dir: Path, agent_id: str) -> tuple[int, str]:

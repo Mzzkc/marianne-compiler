@@ -599,3 +599,35 @@ def test_engage_active_max_bytes_rejects_bad_values_and_scores_without_active(
     other.mkdir()
     result, _eng, _o = _engage(other, "full-lifecycle", "--active-max-bytes", "100")
     assert result.exit_code != 0  # fixture score attaches no active cadenza
+
+
+def test_bind_engagement_is_the_engage_body_and_writes_only_under_runs(tmp_path: Path) -> None:
+    from marianne_compiler.agent_cli import EngageRefusal, bind_engagement, pending_debt
+
+    agents, run = _targeted(tmp_path)
+    before = {p: p.read_bytes() for p in agents.rglob("*") if p.is_file()}
+    task = tmp_path / "TASK.md"
+    task.write_text("GOAL: g\n")
+    engagement = bind_engagement(
+        "canyon", purpose="lib", inventory=tmp_path / "inventory.yaml",
+        runs_dir=tmp_path / "runs", shape="targeted-work", defer_lifecycle=True,
+        task=task, agents_dir=agents, date="20261020", evidence_at="2026-10-20T10:00:00Z",
+    )
+    assert engagement.job_name == "targeted-work-canyon-lib-20261020"
+    assert engagement.score_path.is_file()
+    assert (engagement.run_dir / "task-TASK.md").is_file()
+    assert engagement.workspace == (tmp_path / "runs").resolve() / "canyon-lib-20261020"
+    assert before == {p: p.read_bytes() for p in agents.rglob("*") if p.is_file()}
+    assert pending_debt(agents, "canyon")[0] == 0
+
+    _write_debt(agents, carried_pending_from=["e1", "e2"])
+    try:
+        bind_engagement(
+            "canyon", purpose="again", inventory=tmp_path / "inventory.yaml",
+            runs_dir=tmp_path / "runs", shape="targeted-work", defer_lifecycle=True,
+            agents_dir=agents, date="20261020", evidence_at="2026-10-20T10:00:00Z",
+        )
+    except EngageRefusal as exc:
+        assert exc.kind == "debt" and exc.debt_count == 3
+    else:
+        raise AssertionError("debt refusal expected")
