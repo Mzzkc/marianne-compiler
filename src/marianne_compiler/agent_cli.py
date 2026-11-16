@@ -369,7 +369,10 @@ def engage_command(
     if task_line:
         typer.echo(task_line)
     typer.echo(f"score: {output}")
-    typer.echo(f"workspace: {run_workspace}")
+    for line in _workspace_lines(
+        (workspaces_dir or runs_dir), engagement, run_workspace, run_dir,
+    ):
+        typer.echo(line)
     typer.echo(f"installed: {installed}")
     if shape == _DEFERRING_SHAPE:
         # Conductors pipe stderr away, so the debt line is on both streams.
@@ -381,6 +384,42 @@ def engage_command(
     elif debt_count:
         typer.echo(f"debt: {debt_count} pending{debt_note}")
     typer.echo(f"run: mzt run {output}")
+
+
+def _filesystem(path: Path) -> tuple[int, str]:
+    """(device id, mount point) of the nearest existing ancestor of ``path``."""
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    device = probe.stat().st_dev
+    mount = probe
+    while not mount.is_mount() and mount != mount.parent:
+        mount = mount.parent
+    return device, str(mount)
+
+
+def _workspace_lines(
+    requested_root: Path, engagement: str, real_workspace: Path, run_dir: Path,
+) -> list[str]:
+    """The resolved workspace, its filesystem, and a warning when a symlink hid a move.
+
+    A workspace requested under a symlink that lands on another filesystem
+    (e.g. a home directory that is a link onto a USB disk) silently changes
+    where cycle-state and receipts live and how fast they are; say so.
+    """
+    device, mount = _filesystem(real_workspace)
+    lines = [f"workspace: {real_workspace} (filesystem {mount})"]
+    requested = Path(os.path.abspath(requested_root.expanduser())) / engagement
+    if requested != real_workspace:
+        runs_device, runs_mount = _filesystem(run_dir)
+        if device != runs_device:
+            lines.append(
+                f"WARNING: workspace {requested} resolves through a symlink to "
+                f"{real_workspace} on filesystem {mount}, which differs from the runs "
+                f"dir's filesystem {runs_mount}; receipts and workspace will live on "
+                "different disks."
+            )
+    return lines
 
 
 def _echo_both(message: str) -> None:
@@ -405,7 +444,10 @@ def _pending_debt(agents_dir: Path, agent_id: str) -> tuple[int, str]:
         return 0, ""
     record = _read_debt(path)
     if record is None:
-        return _DEBT_REFUSAL_THRESHOLD, f" (debt record {path} is unreadable; counted conservatively)"
+        return (
+            _DEBT_REFUSAL_THRESHOLD,
+            f" (debt record {path} is unreadable; counted conservatively)",
+        )
     if str(record.get("status", "")).strip().lower() != "pending":
         return 0, ""
     count = 1

@@ -340,3 +340,52 @@ def test_full_lifecycle_is_never_refused_for_debt(tmp_path: Path) -> None:
         "--date", "20261020", "--evidence-at", "2026-10-20T10:00:00Z",
     ])
     assert result.exit_code == 0, result.output
+
+
+def test_engage_prints_real_workspace_path_and_filesystem(tmp_path: Path) -> None:
+    result, engagement, _out = _engage(tmp_path)
+    assert result.exit_code == 0, result.output
+    line = next(ln for ln in result.output.splitlines() if ln.startswith("workspace: "))
+    assert line.startswith(f"workspace: {engagement.resolve()} (filesystem /")
+    assert "WARNING" not in result.output
+
+
+def test_engage_warns_when_symlinked_workspace_lands_on_another_filesystem(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    import marianne_compiler.agent_cli as cli
+
+    agents, inventory = _installed_agent(tmp_path, "full-lifecycle")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(elsewhere)
+    real_filesystem = cli._filesystem
+
+    def fake(path: Path) -> tuple[int, str]:
+        device, mount = real_filesystem(path)
+        if elsewhere in (path, *path.parents):
+            return device + 1, "/mnt/other"
+        return device, mount
+
+    monkeypatch.setattr(cli, "_filesystem", fake)
+    base = [
+        "engage", "canyon", "--purpose", "job", "--inventory", str(inventory),
+        "--agents-dir", str(agents), "--date", "20261020",
+        "--evidence-at", "2026-10-20T10:00:00Z",
+    ]
+    result = runner.invoke(app, [
+        *base, "--runs-dir", str(tmp_path / "runs"), "--workspaces-dir", str(link),
+    ])
+    assert result.exit_code == 0, result.output
+    expected = f"workspace: {elsewhere.resolve()}/canyon-job-20261020 (filesystem /mnt/other)"
+    assert expected in result.output
+    assert "WARNING: workspace" in result.output and "symlink" in result.output
+    # The same disk through a symlink is not worth a warning.
+    monkeypatch.setattr(cli, "_filesystem", real_filesystem)
+    again = runner.invoke(app, [
+        *base, "--purpose", "calm", "--runs-dir", str(tmp_path / "runs"),
+        "--workspaces-dir", str(link),
+    ])
+    assert again.exit_code == 0, again.output
+    assert "WARNING" not in again.output

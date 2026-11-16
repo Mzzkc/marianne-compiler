@@ -288,7 +288,7 @@ def bind_score_to_capabilities(
         for num, instrument_name in sheet["per_sheet_instruments"].items():
             if instrument_name == "cli":
                 continue
-            current = merged_config.get(num, merged_config.get(str(num), {}))
+            current = merged_config.pop(str(num), None) or merged_config.get(num) or {}
             merged_config[num] = {**current, "timeout_seconds": step_timeout_seconds}
         sheet["per_sheet_instrument_config"] = merged_config
     limits: dict[str, int] = {}
