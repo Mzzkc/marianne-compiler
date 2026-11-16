@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import stat
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,7 +25,7 @@ from marianne_compiler.capabilities import (
     bind_score_to_capabilities,
     localize_home_path,
 )
-from marianne_compiler.identity import DEFAULT_AGENTS_DIR, IdentitySeeder
+from marianne_compiler.identity import DEFAULT_AGENTS_DIR, IdentitySeeder, validate_agent_id
 from marianne_compiler.memory_census import census_agent_memory
 from marianne_compiler.portable_paths import portabilize_score
 
@@ -401,6 +402,150 @@ def engage_command(
     elif debt_count:
         typer.echo(f"debt: {debt_count} pending{debt_note}")
     typer.echo(f"run: mzt run {output}")
+
+
+_STOCK_ACTIVE = frozenset({
+    "01-task-board.md", "02-status.md", "03-urgent-directives.md", "04-handoffs.md",
+})
+_DEFAULT_ACTIVE_MAX_BYTES = 32768
+_NUMBERED = re.compile(r"^(\d+)-(.+)$")
+
+
+@app.command("cadenza")
+def cadenza_command(
+    agent: str = typer.Argument(..., help="Installed agent id."),
+    action: str = typer.Argument(..., help="add | list | retire"),
+    target: str | None = typer.Argument(
+        None, help="add: the file to copy in. retire: the cadenza name to retire.",
+    ),
+    name: str | None = typer.Option(
+        None, "--name", help="add: cadenza name (default: the file's stem).",
+    ),
+    max_bytes: int = typer.Option(
+        _DEFAULT_ACTIVE_MAX_BYTES, "--max-bytes",
+        help="Cap for the whole active directory (default 32768, the AGENTS README "
+        "size rule). add refuses to exceed it.",
+    ),
+    agents_dir: Path = typer.Option(
+        DEFAULT_AGENTS_DIR, "--agents-dir", help="Canonical box-local agent data root.",
+    ),
+) -> None:
+    """Manage an agent's standing context: cadenzas/personal/active/.
+
+    add copies FILE in as NN-<name>.md (next number), refusing to push the
+    directory over the cap: everything in active/ is injected into every sheet
+    that attaches it, so its size is prompt size. retire MOVES a cadenza to
+    cadenzas/personal/archive/<UTC stamp>-<file>; nothing is ever deleted.
+    """
+    if action not in ("add", "list", "retire"):
+        raise typer.BadParameter("action must be one of: add, list, retire")
+    agent_id = validate_agent_id(agent)
+    if max_bytes <= 0:
+        raise typer.BadParameter("--max-bytes must be positive")
+    agent_dir = agents_dir.expanduser().resolve() / agent_id
+    if not agent_dir.is_dir():
+        raise typer.BadParameter(f"no agent directory for {agent_id!r} at {agent_dir}")
+    personal = agent_dir / "cadenzas" / "personal"
+    active = personal / "active"
+    if action == "list":
+        _cadenza_list(active, max_bytes)
+    elif action == "add":
+        if target is None:
+            raise typer.BadParameter("cadenza add needs FILE")
+        _cadenza_add(active, Path(target), name, max_bytes)
+    else:
+        if target is None:
+            raise typer.BadParameter("cadenza retire needs NAME")
+        _cadenza_retire(active, personal / "archive", target, max_bytes)
+
+
+def _active_files(active: Path) -> list[Path]:
+    if not active.is_dir():
+        return []
+    return sorted(p for p in active.iterdir() if p.is_file())
+
+
+def _cadenza_name(path: Path) -> str:
+    stem = path.name[:-3] if path.name.endswith(".md") else path.name
+    match = _NUMBERED.match(stem)
+    return match.group(2) if match else stem
+
+
+def _cadenza_list(active: Path, max_bytes: int) -> None:
+    files = _active_files(active)
+    total = sum(p.stat().st_size for p in files)
+    for path in files:
+        info = path.stat()
+        stamp = datetime.fromtimestamp(info.st_mtime, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        typer.echo(f"{path.name}  {info.st_size} bytes  {stamp}")
+    verdict = "OVER CAP" if total > max_bytes else "ok"
+    typer.echo(f"total: {total} of {max_bytes} bytes ({verdict}) in {active}")
+
+
+def _cadenza_add(active: Path, source: Path, name: str | None, max_bytes: int) -> None:
+    source = source.expanduser()
+    if source.is_symlink() or not source.is_file():
+        raise typer.BadParameter(f"{source} is not a regular file")
+    data = source.read_bytes()
+    if not data.strip():
+        raise typer.BadParameter(f"{source} is empty")
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or source.stem).lower()).strip("-")
+    if not slug:
+        raise typer.BadParameter("cadenza name needs at least one letter or digit")
+    existing = _active_files(active)
+    clash = [p.name for p in existing if _cadenza_name(p) == slug]
+    if clash:
+        raise typer.BadParameter(
+            f"active cadenza {slug!r} already exists as {clash[0]}; pick another "
+            "--name or retire it first"
+        )
+    total = sum(p.stat().st_size for p in existing)
+    if total + len(data) > max_bytes:
+        raise typer.BadParameter(
+            f"refusing: active/ holds {total} bytes and this file adds {len(data)}, "
+            f"over the {max_bytes}-byte cap. Retire or shrink something first "
+            "(marianne-agents cadenza AGENT list / retire)."
+        )
+    numbers = [
+        int(m.group(1)) for p in existing if (m := _NUMBERED.match(p.name))
+    ]
+    target = active / f"{max(numbers, default=0) + 1:02d}-{slug}.md"
+    active.mkdir(parents=True, exist_ok=True)
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(data)
+    typer.echo(f"added: {target} ({len(data)} bytes)")
+    typer.echo(f"total: {total + len(data)} of {max_bytes} bytes")
+
+
+def _cadenza_retire(active: Path, archive: Path, name: str, max_bytes: int) -> None:
+    wanted = name.strip()
+    matches = [
+        p for p in _active_files(active)
+        if wanted in (p.name, _cadenza_name(p), p.name.removesuffix(".md"))
+    ]
+    if not matches:
+        raise typer.BadParameter(f"no active cadenza named {wanted!r} in {active}")
+    if len(matches) > 1:
+        raise typer.BadParameter(
+            f"{wanted!r} is ambiguous: {', '.join(p.name for p in matches)}"
+        )
+    path = matches[0]
+    if path.name in _STOCK_ACTIVE:
+        raise typer.BadParameter(
+            f"{path.name} is one of the four stock coordination files that the "
+            "installed scores validate; retire only cadenzas you added, and shrink "
+            "the stock files through the Consolidate protocol"
+        )
+    archive.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    destination = archive / f"{stamp}-{path.name}"
+    if destination.exists():
+        raise typer.BadParameter(f"archive target already exists: {destination}")
+    shutil.move(str(path), str(destination))
+    remaining = sum(p.stat().st_size for p in _active_files(active))
+    typer.echo(f"retired: {path.name} -> {destination}")
+    typer.echo(f"total: {remaining} of {max_bytes} bytes")
 
 
 def _filesystem(path: Path) -> tuple[int, str]:

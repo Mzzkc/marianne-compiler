@@ -445,3 +445,78 @@ def test_attached_task_renders_to_the_copy_and_passes_v004(tmp_path: Path) -> No
         config, moved / "t.yaml", (moved / "t.yaml").read_text()
     )
     assert issues == []
+
+
+def _cadenza_agent(tmp_path: Path, stock_bytes: int = 100) -> tuple[Path, Path]:
+    agents = tmp_path / "agents"
+    active = agents / "canyon" / "cadenzas" / "personal" / "active"
+    active.mkdir(parents=True)
+    for name in ("01-task-board.md", "02-status.md", "03-urgent-directives.md", "04-handoffs.md"):
+        (active / name).write_text("x" * stock_bytes)
+    return agents, active
+
+
+def _cadenza(agents: Path, *args: str):
+    return runner.invoke(app, ["cadenza", "canyon", *args, "--agents-dir", str(agents)])
+
+
+def test_cadenza_add_numbers_names_and_lists(tmp_path: Path) -> None:
+    agents, active = _cadenza_agent(tmp_path)
+    note = tmp_path / "House Rules.md"
+    note.write_text("# Rules\nBe kind.\n")
+    result = _cadenza(agents, "add", str(note))
+    assert result.exit_code == 0, result.output
+    assert (active / "05-house-rules.md").read_text() == "# Rules\nBe kind.\n"
+    second = tmp_path / "b.md"
+    second.write_text("b")
+    assert _cadenza(agents, "add", str(second), "--name", "Extra Notes").exit_code == 0
+    assert (active / "06-extra-notes.md").is_file()
+    listing = _cadenza(agents, "list")
+    assert listing.exit_code == 0
+    assert "05-house-rules.md  17 bytes" in listing.output
+    assert "total: 418 of 32768 bytes (ok)" in listing.output
+    assert note.exists()  # the source is copied, never consumed
+
+
+def test_cadenza_add_refuses_over_cap_duplicates_and_bad_input(tmp_path: Path) -> None:
+    agents, active = _cadenza_agent(tmp_path, stock_bytes=30000)
+    big = tmp_path / "big.md"
+    big.write_text("y" * 5000)
+    refused = _cadenza(agents, "add", str(big))
+    assert refused.exit_code != 0 and "32768-byte cap" in refused.output
+    assert not (active / "05-big.md").exists()
+    assert _cadenza(agents, "add", str(big), "--max-bytes", "200000").exit_code == 0
+    assert _cadenza(agents, "add", str(big), "--max-bytes", "200000").exit_code != 0  # name taken
+    empty = tmp_path / "empty.md"
+    empty.write_text("")
+    assert _cadenza(agents, "add", str(empty)).exit_code != 0
+    assert _cadenza(agents, "add", str(tmp_path / "missing.md")).exit_code != 0
+    assert _cadenza(agents, "list", "--max-bytes", "100").output.count("OVER CAP") == 1
+
+
+def test_cadenza_retire_moves_to_archive_and_protects_stock_files(tmp_path: Path) -> None:
+    agents, active = _cadenza_agent(tmp_path)
+    note = tmp_path / "n.md"
+    note.write_text("keep me")
+    _cadenza(agents, "add", str(note), "--name", "rules")
+    result = _cadenza(agents, "retire", "rules")
+    assert result.exit_code == 0, result.output
+    assert not (active / "05-rules.md").exists()
+    archived = list((active.parent / "archive").glob("*-05-rules.md"))
+    assert len(archived) == 1 and archived[0].read_text() == "keep me"
+    assert archived[0].name[:8].isdigit() and archived[0].name[8] == "T"
+    assert _cadenza(agents, "retire", "rules").exit_code != 0  # gone
+    stock = _cadenza(agents, "retire", "01-task-board.md")
+    assert stock.exit_code != 0 and "stock" in stock.output
+    assert (active / "01-task-board.md").is_file()
+
+
+def test_cadenza_rejects_unknown_action_agent_and_missing_dir(tmp_path: Path) -> None:
+    agents, _active = _cadenza_agent(tmp_path)
+    assert _cadenza(agents, "delete").exit_code != 0
+    assert runner.invoke(
+        app, ["cadenza", "ghost", "list", "--agents-dir", str(agents)]
+    ).exit_code != 0
+    assert runner.invoke(
+        app, ["cadenza", "../x", "list", "--agents-dir", str(agents)]
+    ).exit_code != 0
