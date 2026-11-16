@@ -21,6 +21,7 @@ from marianne_compiler.agent_package import (
 )
 from marianne_compiler.capabilities import (
     MAX_TIMEOUT_SECONDS,
+    CapabilityResolutionError,
     bind_config_to_capabilities,
     bind_score_to_capabilities,
     localize_home_path,
@@ -305,6 +306,13 @@ def engage_command(
         "bound score; the conductor then fails a required item over the cap before "
         "execution instead of shipping an over-sized prompt. Unset = no cap.",
     ),
+    phase_class: list[str] = typer.Option(
+        [], "--class",
+        help="PHASE=CLASS, repeatable (e.g. --class work=strong --class inspect=review). "
+        "That phase's sheets run on the capability class, resolved per machine by "
+        "the conductor at submit, instead of the inventory route. Bound inside the "
+        "binder so receipts stay true; never edit a bound score to change a model.",
+    ),
     workspaces_dir: Path | None = typer.Option(
         None, "--workspaces-dir", "-w",
         help="Root for the fresh engagement workspace; defaults to --runs-dir.",
@@ -374,15 +382,29 @@ def engage_command(
             raise typer.BadParameter(
                 f"{flag} must be a positive integer of at most {MAX_TIMEOUT_SECONDS}"
             )
+    phase_classes: dict[str, str] = {}
+    for item in phase_class:
+        phase_name, sep, class_name = item.partition("=")
+        phase_name, class_name = phase_name.strip(), class_name.strip()
+        if not sep or not phase_name or not class_name:
+            raise typer.BadParameter(f"--class takes PHASE=CLASS, got {item!r}")
+        if phase_name in phase_classes:
+            raise typer.BadParameter(f"--class names phase {phase_name!r} twice")
+        phase_classes[phase_name] = class_name
     task_source = _check_task_file(task) if task is not None else None
     score_data = _load_mapping(installed, "score")
     inventory_data = _load_mapping(inventory, "inventory")
     now = _parse_time(evidence_at) if evidence_at else datetime.now(UTC)
-    bound = bind_score_to_capabilities(
-        score_data, inventory_data, run_workspace=run_workspace, now=now,
-        step_timeout_seconds=step_timeout, idle_timeout_seconds=idle_timeout,
-        active_cadenza_max_bytes=active_max_bytes,
-    )
+    try:
+        bound = bind_score_to_capabilities(
+            score_data, inventory_data, run_workspace=run_workspace, now=now,
+            step_timeout_seconds=step_timeout, idle_timeout_seconds=idle_timeout,
+            active_cadenza_max_bytes=active_max_bytes, phase_classes=phase_classes or None,
+        )
+    except CapabilityResolutionError as exc:
+        if phase_classes and "--class" in str(exc):
+            raise typer.BadParameter(str(exc)) from exc
+        raise
     bound["name"] = job_name
     bound, path_warnings = portabilize_score(bound, agents_dir)
     for warning in path_warnings:
@@ -401,6 +423,9 @@ def engage_command(
     ):
         typer.echo(line)
     typer.echo(f"installed: {installed}")
+    if phase_classes:
+        typer.echo("classes: " + ", ".join(f"{p}={c}" for p, c in sorted(phase_classes.items()))
+                   + " (chains resolve at submit; mzt validate shows them)")
     if shape == _DEFERRING_SHAPE:
         # Conductors pipe stderr away, so the debt line is on both streams.
         _echo_both(

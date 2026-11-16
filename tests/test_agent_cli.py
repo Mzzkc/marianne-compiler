@@ -271,6 +271,33 @@ def test_engage_rejects_out_of_range_timeouts_before_writing(tmp_path: Path) -> 
         assert not engagement.exists()
 
 
+def test_engage_class_flag_binds_phase_to_class(tmp_path: Path) -> None:
+    """GH #550: no post-bind edit is needed to change a phase's model."""
+    result, _engagement, out = _engage(
+        tmp_path, "full-lifecycle", "--class", "work=strong",
+    )
+    assert result.exit_code == 0, result.output
+    assert "classes: work=strong" in result.output
+    bound = yaml.safe_load(out.read_text())
+    assert bound["sheet"]["per_sheet_instruments"][3] == "strong"
+    assert bound["instrument"] == "strong"
+    contract = bound["prompt"]["variables"]["marianne_agent"]
+    assert contract["routing_receipts"]["work"]["class"] == "strong"
+
+
+def test_engage_class_flag_refuses_bad_input_before_writing(tmp_path: Path) -> None:
+    # no '=', the same phase twice, a phase the score does not route
+    for i, value in enumerate(("work", "work=strong,", "inspect=review")):
+        sub = tmp_path / str(i)
+        sub.mkdir()
+        args = ["--class", value]
+        if value == "work=strong,":
+            args = ["--class", "work=strong", "--class", "work=fast"]
+        result, engagement, _out = _engage(sub, "full-lifecycle", *args)
+        assert result.exit_code != 0, value
+        assert not engagement.exists()
+
+
 def _write_debt(agents: Path, **fields: object) -> None:
     meta = agents / "canyon" / ".marianne"
     meta.mkdir(parents=True, exist_ok=True)

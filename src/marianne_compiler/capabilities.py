@@ -203,8 +203,16 @@ def bind_score_to_capabilities(
     step_timeout_seconds: int | None = None,
     idle_timeout_seconds: int | None = None,
     active_cadenza_max_bytes: int | None = None,
+    phase_classes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Bind one already-compiled persistent-agent score to live evidence.
+
+    ``phase_classes`` maps a lifecycle phase to a capability class name
+    (``work=strong``). Those phases are not routed from the inventory: their
+    sheets name the class, the conductor resolves and freezes its chain at
+    submit (per machine, from the class-map layers), and the phase's receipt
+    says so. Set here so the receipts describe the score that runs; never edit
+    a bound score to change a model.
 
     ``active_cadenza_max_bytes`` sets ``max_bytes`` on every injection item that
     attaches the personal active cadenza, so the conductor fails the sheet
@@ -254,8 +262,22 @@ def bind_score_to_capabilities(
             "Score's Marianne agent contract has no phase requirements to bind"
         )
 
+    class_phases = dict(phase_classes or {})
+    for phase_name, class_name in class_phases.items():
+        if phase_name not in requirements:
+            raise CapabilityResolutionError(
+                f"--class phase '{phase_name}' is not an LLM phase of this score "
+                f"(phases: {', '.join(sorted(map(str, requirements)))})"
+            )
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", class_name):
+            raise CapabilityResolutionError(
+                f"--class {phase_name}: '{class_name}' is not a class name"
+            )
+    routed_requirements = {
+        phase: req for phase, req in requirements.items() if phase not in class_phases
+    }
     config: dict[str, Any] = {
-        "defaults": {"phase_requirements": copy.deepcopy(requirements)},
+        "defaults": {"phase_requirements": copy.deepcopy(routed_requirements)},
         "agents": [{"name": str(contract.get("agent_id", ""))}],
     }
     route_config = bind_config_to_capabilities(
@@ -291,6 +313,30 @@ def bind_score_to_capabilities(
         merged_config[phase] = {**prior, **route_config}
     sheet["per_sheet_instrument_config"] = merged_config
     sheet["per_sheet_fallbacks"] = resolved["per_sheet_fallbacks"]
+    for phase_name, class_name in class_phases.items():
+        for num in PHASE_MAP[phase_name]:
+            sheet["per_sheet_instruments"][num] = class_name
+            # The class chain is the fallback chain; a sibling list would be
+            # tried after the class is exhausted and is not what was chosen.
+            sheet["per_sheet_fallbacks"][num] = []
+            prior = merged_config.get(num, merged_config.get(str(num), {}))
+            if isinstance(prior, dict) and "model" in prior:
+                # A model cannot apply to a class (its entries are different
+                # instruments); the conductor refuses that at submit.
+                merged_config[num] = {k: v for k, v in prior.items() if k != "model"}
+        defaults["routing_receipts"][phase_name] = {
+            "phase": phase_name,
+            "class": class_name,
+            "selected": [],
+            "resolution": "capability class, resolved and frozen by the conductor "
+            "at submit (mzt status shows the chain)",
+        }
+    if "work" in class_phases:
+        bound["instrument"] = class_phases["work"]
+        bound["instrument_fallbacks"] = []
+    if class_phases:
+        limits_classes = dict(sorted(class_phases.items()))
+        contract["phase_classes"] = limits_classes
     if step_timeout_seconds is not None:
         # Per-sheet config is merged over what the installed score carried, so an
         # explicit limit wins; deterministic cli sheets are never touched.

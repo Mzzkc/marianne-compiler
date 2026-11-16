@@ -58,7 +58,9 @@ def _score(agents_root: str, name: str = "canyon") -> dict:
                 ),
             },
         ],
-        "techniques": {"x": {"config": {"path": f"{agents_root.rsplit('/', 1)[0]}/techniques/x.md"}}},
+        "techniques": {
+            "x": {"config": {"path": f"{agents_root.rsplit('/', 1)[0]}/techniques/x.md"}},
+        },
     }
 
 

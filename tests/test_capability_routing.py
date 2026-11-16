@@ -719,3 +719,40 @@ def test_idle_timeout_must_exceed_check_interval(tmp_path: Path) -> None:
             _timeout_score(), _timeout_inventory(),
             run_workspace=tmp_path / "ws", now=NOW, idle_timeout_seconds=30,
         )
+
+
+def test_phase_class_binds_sheet_to_class_and_receipt_says_so(tmp_path: Path) -> None:
+    """GH #550: --class work=strong replaces the inventory route for that phase."""
+    score = _timeout_score()
+    score["sheet"]["per_sheet_instrument_config"][3] = {"model": "stale", "x": 1}
+    bound = bind_score_to_capabilities(
+        score, _timeout_inventory(), run_workspace=tmp_path / "ws", now=NOW,
+        phase_classes={"work": "strong"}, step_timeout_seconds=900,
+    )
+    sheet = bound["sheet"]
+    assert sheet["per_sheet_instruments"][3] == "strong"
+    assert sheet["per_sheet_fallbacks"][3] == []
+    # A pinned model cannot apply to a class; the binder drops it, keeps the rest.
+    assert "model" not in sheet["per_sheet_instrument_config"][3]
+    assert sheet["per_sheet_instrument_config"][3]["timeout_seconds"] == 900
+    assert bound["instrument"] == "strong"
+    # recon is still routed from the inventory.
+    assert sheet["per_sheet_instruments"][1] != "strong"
+    contract = bound["prompt"]["variables"]["marianne_agent"]
+    assert contract["phase_classes"] == {"work": "strong"}
+    receipt = contract["routing_receipts"]["work"]
+    assert receipt["class"] == "strong" and receipt["selected"] == []
+    assert contract["routing_receipts"]["recon"]["selected"]
+
+
+def test_phase_class_refuses_unknown_phase_and_bad_name(tmp_path: Path) -> None:
+    with pytest.raises(CapabilityResolutionError, match="not an LLM phase"):
+        bind_score_to_capabilities(
+            _timeout_score(), _timeout_inventory(), run_workspace=tmp_path / "a",
+            now=NOW, phase_classes={"temperature_check": "fast"},
+        )
+    with pytest.raises(CapabilityResolutionError, match="not a class name"):
+        bind_score_to_capabilities(
+            _timeout_score(), _timeout_inventory(), run_workspace=tmp_path / "b",
+            now=NOW, phase_classes={"work": "Strong Model"},
+        )
