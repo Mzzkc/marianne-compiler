@@ -287,8 +287,8 @@ The technique manifest tells the agent what they can do:
 5. Do not append unrelated catalog instruments; if a sheet may use an instrument, declare it in that tier
 
 **Cycle verdict (GH #463)** — The AAR sheet carries an `on_success` `run` trigger that
-folds the Inspect sheet's enforced `VERDICT:` line and the AAR's `DELTA:` into
-`cycle-state/<agent>-verdict.yaml` (`verdict: ACCEPT | ACCEPT_WITH_HOLDS | REWORK |
+folds the Inspect sheet's enforced `VERDICT:` line (closed: `PASS | REWORK | BLOCKED`, alone on its line, with `FINDINGS:` bullets; legacy `ACCEPT | FAIL | REJECT` are still read) and the AAR's `DELTA:` into
+`cycle-state/<agent>-verdict.yaml` (`verdict: ACCEPT | ACCEPT_WITH_HOLDS | REWORK | BLOCKED |
 UNDETERMINED`, with the rule and both inputs recorded) by a deterministic shell step,
 no model call. The maturity sheet validates the enum (UNDETERMINED fails). A downstream
 gate reads one fixed-schema file instead of parsing prose. `defaults.verdict: false`
