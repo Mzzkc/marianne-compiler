@@ -240,7 +240,7 @@ class TestValidationGenerator:
         gen = ValidationGenerator()
         result = gen.generate(_make_agent_def("guide"), {})
         placeholder = [v for v in result if "placeholder" in v.get("description", "")]
-        verdict = [v for v in result if "real verdict" in v.get("description", "")]
+        verdict = [v for v in result if v.get("type") == "content_regex"]
         assert placeholder, "every artifact gets the no-placeholder check"
         assert len(verdict) == 1 and verdict[0]["condition"] == "stage == 7"
         inspect_checks = [
@@ -260,10 +260,72 @@ class TestValidationGenerator:
             finished = skeleton.replace("PENDING — verification in progress", "REWORK")
             for text, expect_pass in ((skeleton, False), (finished, True)):
                 art.write_text(text, encoding="utf-8")
-                for check in (inspect_checks[0], verdict[0]):
-                    cmd = check["command"].replace("{workspace}", str(ws))
-                    rc = subprocess.run(["bash", "-c", cmd], check=False).returncode
-                    assert (rc == 0) == expect_pass, (check["description"], text[:40], rc)
+                cmd = inspect_checks[0]["command"].replace("{workspace}", str(ws))
+                rc = subprocess.run(["bash", "-c", cmd], check=False).returncode
+                assert (rc == 0) == expect_pass, (text[:40], rc)
+                import re
+                found = re.search(verdict[0]["pattern"], text, re.MULTILINE)
+                assert bool(found) == expect_pass, (text[:40], found)
+
+    def test_inspection_requires_the_closed_verdict_line(self) -> None:
+        """A free-prose verdict fails; only PASS/REWORK/BLOCKED alone on a line passes."""
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        result = ValidationGenerator().generate(_make_agent_def("guide"), {})
+        (rule,) = [v for v in result if v.get("type") == "content_regex"]
+        assert rule["condition"] == "stage == 7"
+        assert rule["path"] == "{workspace}/cycle-state/guide-inspection.md"
+        assert "closed verdict" in rule["description"]
+        (only,) = [v for v in result if "no verdict line other" in v.get("description", "")]
+        findings = [
+            v for v in result
+            if v.get("pattern") == "FINDINGS:" and v["condition"] == "stage == 7"
+        ]
+        assert findings, "inspect sheet requires a FINDINGS: section"
+
+        good = [
+            "VERDICT: PASS\nQUALIFIER: bounded to the runtime branch\nEVIDENCE: x\n",
+            "VERDICT: REWORK\n",
+            "VERDICT: BLOCKED\n",
+            "VERDICT: BLOCKED   \nFINDINGS:\n- needs independent verification\n",
+            "# Inspection\n\nVERDICT: PASS\n",
+        ]
+        bad = [
+            "VERDICT: **NOT READY \u2014 one P1 regression.**\n",
+            "## VERDICT:\n**READY FOR NON-EMBER VERIFICATION, not ready to push.**\n",
+            "VERDICT: PASS WITH ISSUES\n",
+            "VERDICT: PASS \u2014 fine\n",
+            "VERDICT: ACCEPT\n",
+            "VERDICT: pass\n",
+            "**VERDICT: PASS**\n",
+            "  VERDICT: PASS\n",
+            "VERDICT: PASS | REWORK | BLOCKED\n",
+            "The runtime branch is a bounded, clean change.\n",
+            "Qualified PASS\n",
+            "VERDICT: PENDING\n",
+        ]
+        for text in good:
+            assert re.search(rule["pattern"], text, re.MULTILINE), text
+        for text in bad:
+            assert not re.search(rule["pattern"], text, re.MULTILINE), text
+        if shutil.which("bash") is None:
+            return
+        # The second check stops a later free-prose line from overriding the
+        # closed one (mzt verdict takes the last verdict-shaped line).
+        later = "VERDICT: PASS\nbody\n## VERDICT: NOT READY \u2014 regression\n"
+        with tempfile.TemporaryDirectory() as temp:
+            ws = Path(temp)
+            (ws / "cycle-state").mkdir()
+            art = ws / "cycle-state" / "guide-inspection.md"
+            cmd = only["command"].replace("{workspace}", str(ws))
+            for text, expect in [(g, True) for g in good] + [(later, False)]:
+                art.write_text(text, encoding="utf-8")
+                rc = subprocess.run(["bash", "-c", cmd], check=False).returncode
+                assert (rc == 0) == expect, (text, rc)
 
     def test_agent_name_in_paths(self) -> None:
         """Agent name is correctly embedded in file paths."""

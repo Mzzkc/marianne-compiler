@@ -129,9 +129,9 @@ class SheetComposer:
 
         GH #463: nothing in the 12-sheet cycle produced a fixed-enum verdict
         a downstream gate could read without parsing prose. The Inspect
-        sheet's ``VERDICT:`` line is enforced (ACCEPT|REWORK|PASS|FAIL|REJECT,
-        GH #461) and the AAR carries ``DELTA:``; a ``run`` trigger on the AAR
-        sheet's success folds them into ``cycle-state/<name>-verdict.yaml``
+        sheet's ``VERDICT:`` line is enforced (PASS|REWORK|BLOCKED, with the
+        legacy ACCEPT|FAIL|REJECT still read; GH #461) and the AAR carries
+        ``DELTA:``; a ``run`` trigger on the AAR sheet's success folds them into ``cycle-state/<name>-verdict.yaml``
         under a pre-fixed rule, so the verdict is derived from the cycle's
         own evidence by a deterministic shell step. ``defaults.verdict:
         false`` turns it off.
@@ -146,10 +146,11 @@ class SheetComposer:
             f'inspect={shlex.quote(inspection)}; aar={shlex.quote(aar)}; out={shlex.quote(out)}',
             "raw=$(grep -iE '^VERDICT:' \"$inspect\" | head -1 | "
             "sed -E 's/^VERDICT:[[:space:]]*//I' | tr '[:lower:]' '[:upper:]' | "
-            "grep -oE '^(ACCEPT|REWORK|PASS|FAIL|REJECT)' || true)",
+            "grep -oE '^(ACCEPT|REWORK|PASS|FAIL|REJECT|BLOCKED)' || true)",
             "case \"$raw\" in",
             "  ACCEPT|PASS) verdict=ACCEPT ;;",
             "  REWORK|FAIL|REJECT) verdict=REWORK ;;",
+            "  BLOCKED) verdict=BLOCKED ;;",
             "  *) verdict=UNDETERMINED ;;",
             "esac",
             "delta=$(grep -iE '^DELTA:' \"$aar\" | head -1 | "
@@ -166,7 +167,7 @@ class SheetComposer:
             "  printf 'aar_delta: %s\\n' \"$(printf '%s' \"$delta\" | "
             "sed -e \"s/'/''/g\" -e \"s/^/'/\" -e \"s/$/'/\")\"",
             "  printf 'rule: ACCEPT|PASS->ACCEPT; REWORK|FAIL|REJECT->REWORK; "
-            "ACCEPT with a non-empty AAR DELTA->ACCEPT_WITH_HOLDS; else UNDETERMINED\\n'",
+            "BLOCKED->BLOCKED; ACCEPT with a non-empty AAR DELTA->ACCEPT_WITH_HOLDS; else UNDETERMINED\\n'",
             "  printf 'decided_at: %s\\n' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"",
             "} > \"$out.tmp\" && mv \"$out.tmp\" \"$out\"",
             "echo \"verdict: $verdict\"",

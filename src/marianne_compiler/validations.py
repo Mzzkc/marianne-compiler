@@ -24,6 +24,10 @@ from marianne_compiler.sheets import SHEET_PHASE, SHEETS_PER_CYCLE
 
 _logger = logging.getLogger(__name__)
 
+#: The closed verdict line of an inspection report (``content_regex``, MULTILINE).
+#: Exact words, upper case, alone on the line. ``mzt verdict`` reads the same line.
+INSPECTION_VERDICT_PATTERN = r"^VERDICT: (PASS|REWORK|BLOCKED)[ \t\r]*$"
+
 
 class ValidationGenerator:
     """Generates per-sheet validation rules for agent scores.
@@ -178,18 +182,38 @@ class ValidationGenerator:
             stage=7,
             description=f"Inspection report for {name}",
             min_words=80,
-            required_sections=["VERDICT", "EVIDENCE", "FAILURES", "RISKS", "REQUIRED FIXES"],
+            required_sections=[
+                "VERDICT", "EVIDENCE", "FAILURES", "RISKS", "FINDINGS", "REQUIRED FIXES",
+            ],
         ))
+        # Closed verdict contract: the report opens with exactly one of three
+        # words, alone on its line, so `mzt verdict` and a small-model conductor
+        # read it without interpreting prose. Free prose fails and the sheet
+        # retries under the normal retry rules.
+        validations.append({
+            "type": "content_regex",
+            "path": inspection_path,
+            "pattern": INSPECTION_VERDICT_PATTERN,
+            "condition": "stage == 7",
+            "description": (
+                f"Inspection report for {name} carries a closed verdict line "
+                "(VERDICT: PASS, VERDICT: REWORK or VERDICT: BLOCKED, alone on its line)"
+            ),
+        })
+        # ``mzt verdict`` takes the LAST verdict-shaped line in the file, so a
+        # second, free-prose one (``## VERDICT: NOT READY ...``) would override
+        # the closed line. Every verdict-shaped line must be the closed form.
         validations.append({
             "type": "command_succeeds",
             "command": (
-                f"grep -qiE '^VERDICT:[[:space:]]*(ACCEPT|REWORK|PASS|FAIL|REJECT)' "
-                f'"{inspection_path}"'
+                "! grep -iE '^[^A-Za-z]*VERDICT[[:space:]]*[:=]' "
+                f'"{inspection_path}" | '
+                "grep -vqE '^VERDICT: (PASS|REWORK|BLOCKED)[[:space:]]*$'"
             ),
             "condition": "stage == 7",
             "description": (
-                f"Inspection report for {name} states a real verdict "
-                "(ACCEPT/REWORK/PASS/FAIL/REJECT)"
+                f"Inspection report for {name} carries no verdict line other than "
+                "the closed one"
             ),
             "timeout_seconds": 10,
         })
@@ -265,12 +289,12 @@ class ValidationGenerator:
             validations.append({
                 "type": "command_succeeds",
                 "command": (
-                    "grep -qE '^verdict: (ACCEPT|ACCEPT_WITH_HOLDS|REWORK)$' "
+                    "grep -qE '^verdict: (ACCEPT|ACCEPT_WITH_HOLDS|REWORK|BLOCKED)$' "
                     f'"{{workspace}}/cycle-state/{name}-verdict.yaml"'
                 ),
                 "condition": "stage == 11",
                 "description": (
-                    f"Cycle verdict for {name} is ACCEPT, ACCEPT_WITH_HOLDS or REWORK "
+                    f"Cycle verdict for {name} is ACCEPT, ACCEPT_WITH_HOLDS, REWORK or BLOCKED "
                     "(UNDETERMINED fails: the inspection carried no real VERDICT)"
                 ),
                 "timeout_seconds": 10,

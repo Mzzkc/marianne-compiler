@@ -304,6 +304,7 @@ class TestVerdictTrigger:
             "ACCEPT": ("VERDICT: ACCEPT\nEVIDENCE:\n", "DELTA: none\n"),
             "ACCEPT_WITH_HOLDS": ("VERDICT: PASS — fine\n", "DELTA: two tests still red\n"),
             "REWORK": ("VERDICT: reject\n", "DELTA: none\n"),
+            "BLOCKED": ("VERDICT: BLOCKED\nQUALIFIER: needs a decision\n", "DELTA: none\n"),
             "UNDETERMINED": ("VERDICT: PENDING\n", "DELTA: none\n"),
         }
         for want, (inspection, aar) in cases.items():
@@ -319,3 +320,40 @@ class TestVerdictTrigger:
             text = (ws / "cycle-state" / "guide-verdict.yaml").read_text()
             assert f"verdict: {want}\n" in text, (want, text)
             assert "kind: marianne-cycle-verdict" in text
+
+
+class TestInspectVerdictPrompt:
+    """The inspect sheet's prompt states the closed verdict contract."""
+
+    def _inspect_text(self) -> str:
+        from jinja2 import Environment
+
+        template = Environment().from_string(build_phase_template())
+        return template.render(
+            stage=7, workspace="/ws", agent_name="guide", role="r", focus="f",
+            agent_voice="v",
+        )
+
+    def test_prompt_names_the_three_words_and_when_to_use_each(self) -> None:
+        text = self._inspect_text()
+        assert "`VERDICT: PASS`" in text
+        assert "`VERDICT: REWORK`" in text
+        assert "`VERDICT: BLOCKED`" in text
+        assert "alone on its own line" in text
+        assert "PASS = acceptable as it stands" in text
+        assert "REWORK = the same agent can fix it" in text
+        assert "BLOCKED = it needs a decision or someone else" in text
+        assert "independent verification" in text
+        assert "QUALIFIER:" in text
+
+    def test_prompt_keeps_sections_and_adds_findings(self) -> None:
+        text = self._inspect_text()
+        assert (
+            "Use exact section labels: VERDICT:, EVIDENCE:, FAILURES:, RISKS:, "
+            "FINDINGS:, REQUIRED FIXES:." in text
+        )
+        assert "FINDINGS: is a bullet list" in text
+
+    def test_legacy_verdict_words_are_gone_from_the_prompt(self) -> None:
+        text = self._inspect_text()
+        assert "ACCEPT, REWORK, PASS, FAIL or REJECT" not in text

@@ -88,10 +88,25 @@ PHASE_OUTPUTS: dict[str, list[str]] = {
     ],
     "inspect": [
         "Write `{{ workspace }}/cycle-state/{{ agent_name }}-inspection.md`.",
-        _exact_section_labels("VERDICT", "EVIDENCE", "FAILURES", "RISKS", "REQUIRED FIXES"),
-        "VERDICT: must be ACCEPT, REWORK, PASS, FAIL or REJECT. A PENDING or TBD "
-        "line is not a verdict: the sheet fails on it, and so does a retry that "
-        "leaves the file unrewritten.",
+        "Open the report with the verdict line, alone on its own line, uppercase, "
+        "no bold, no heading marks, no other text: `VERDICT: PASS`, "
+        "`VERDICT: REWORK` or `VERDICT: BLOCKED`. Anything else (`ACCEPT`, "
+        "`PASS WITH ISSUES`, `NOT READY`, a sentence) fails the sheet. Write no "
+        "other `VERDICT:` line anywhere in the report.",
+        "Choose the word by who can act next: PASS = acceptable as it stands; "
+        "REWORK = the same agent can fix it from the findings; BLOCKED = it needs "
+        "a decision or someone else, including independent verification you "
+        "cannot do yourself (BLOCKED, with the reason).",
+        "Put any nuance on the lines after the verdict, not in it, for example "
+        "`QUALIFIER: bounded to the runtime branch`.",
+        _exact_section_labels(
+            "VERDICT", "EVIDENCE", "FAILURES", "RISKS", "FINDINGS", "REQUIRED FIXES",
+        ),
+        "FINDINGS: is a bullet list, one `- ` line per finding, or `- none` under "
+        "PASS. A conductor reads that list to decide what to hand back, so each "
+        "bullet must stand alone.",
+        "A PENDING or TBD line is not a verdict: the sheet fails on it, and so "
+        "does a retry that leaves the file unrewritten.",
     ],
     "aar": [
         "Write `{{ workspace }}/cycle-state/{{ agent_name }}-aar.md`.",
